@@ -13,12 +13,13 @@ router.use(attachUser);
  */
 router.get('/api/dashboard/', loginRequired, async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // Lấy ngày hôm nay theo giờ Việt Nam (tránh lệch múi giờ UTC)
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
     // Tổng số học sinh đang học
     const allHS = await HocSinh.findAll({
       where: { dang_hoc: true },
-      attributes: ['id', 'gioi_tinh', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'],
+      attributes: ['id', 'ho_ten', 'gioi_tinh', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'],
     });
 
     const total = allHS.length;
@@ -35,14 +36,26 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
     const ddMap = {};
     diemDanhToday.forEach(dd => { ddMap[dd.ma_hs_id] = dd; });
 
-    // Tính toán tổng
+    // Tính toán tổng và gom danh sách vắng
     let eating = 0, sleeping = 0, absent_eat = 0, absent_sleep = 0;
+    const list_vang_an = [];
+    const list_vang_ngu = [];
+
     allHS.forEach(hs => {
       const dd = ddMap[hs.id];
-      if (!dd || dd.diem_danh_an === 0) eating++;
-      else absent_eat++;
-      if (!dd || dd.diem_danh_ngu === 0) sleeping++;
-      else absent_sleep++;
+      if (!dd || dd.diem_danh_an === 0) {
+        eating++;
+      } else {
+        absent_eat++;
+        list_vang_an.push({ id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, type: dd.diem_danh_an });
+      }
+
+      if (!dd || dd.diem_danh_ngu === 0) {
+        sleeping++;
+      } else {
+        absent_sleep++;
+        list_vang_ngu.push({ id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, type: dd.diem_danh_ngu });
+      }
     });
     const absent = Math.max(absent_eat, absent_sleep);
 
@@ -92,6 +105,7 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
         total, male, female,
         eating, sleeping, absent,
         absent_eat, absent_sleep,
+        list_vang_an, list_vang_ngu,
         khoi: khoiStats,
       },
       nam_hoc: cauhinh.nam_hoc,

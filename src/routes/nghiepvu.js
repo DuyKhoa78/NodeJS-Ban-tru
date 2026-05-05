@@ -100,7 +100,35 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu'), asy
       where: { ngay: ngayFilter },
       include: [{ association: 'hoc_sinh', attributes: ['id', 'ho_ten', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'] }],
     });
-    return res.json({ ok: true, records, ngay: ngayFilter });
+
+    // Kiểm tra xem ngày này có lịch bán trú không
+    let hasSchedule = false;
+    const dateObj = new Date(ngayFilter + 'T00:00:00');
+    const dow = dateObj.getDay(); // 0=CN, 1=T2, ..., 4=T5, 5=T6
+
+    if (dow === 0 || dow === 6) {
+      // Cuối tuần không bao giờ có bán trú
+      hasSchedule = false;
+    } else if (dow === 4) {
+      // Thứ 5: kiểm tra cờ show_t5 trong CauHinhTuan
+      const mon = new Date(dateObj);
+      mon.setDate(dateObj.getDate() - 3); // Thứ 5 - 3 = Thứ 2 (đầu tuần)
+      const monStr = mon.toISOString().split('T')[0];
+      const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
+      const show_t5 = cauHinhTuan?.show_t5 ?? false;
+      if (show_t5) {
+        const pcCount = await PhanCongTrucGV.count({ where: { ngay: ngayFilter } });
+        hasSchedule = pcCount > 0;
+      } else {
+        hasSchedule = false; // Thứ 5 không có bán trú tuần này
+      }
+    } else {
+      // T2-T4, T6: kiểm tra bình thường theo PhanCong
+      const pcCount = await PhanCongTrucGV.count({ where: { ngay: ngayFilter } });
+      hasSchedule = pcCount > 0;
+    }
+
+    return res.json({ ok: true, records, ngay: ngayFilter, has_schedule: hasSchedule });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -108,7 +136,37 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu'), asy
 router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
   try {
     const { loai, records } = req.body;
-    if (!records || !Array.isArray(records)) return res.status(400).json({ ok: false, error: 'Thiếu dữ liệu records' });
+    if (!records || !Array.isArray(records) || records.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Thiếu dữ liệu records' });
+    }
+
+    const reqNgay = records[0].ngay;
+
+    // Lấy thời gian hiện tại theo múi giờ Việt Nam
+    const now = new Date();
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(now);
+    
+    // Ràng buộc 1: Chỉ cho phép điểm danh đúng ngày hiện tại
+    if (reqNgay > todayStr) {
+      return res.status(400).json({ ok: false, error: 'Chưa tới ngày điểm danh.' });
+    }
+    if (reqNgay < todayStr) {
+      return res.status(400).json({ ok: false, error: 'Đã qua ngày điểm danh. Không thể điểm danh bù.' });
+    }
+
+    // Ràng buộc 2: Thời gian từ 10:55 đến 14:00
+    const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+    const [vnHour, vnMinute] = timeStr.split(':').map(Number);
+    const totalMins = vnHour * 60 + vnMinute;
+    if (totalMins < 655 || totalMins > 840) { // 10*60+55 = 655, 14*60 = 840
+      return res.status(400).json({ ok: false, error: 'Hệ thống chỉ cho phép điểm danh trong khung giờ từ 10:55 đến 14:00.' });
+    }
+
+    // Ràng buộc 3: Ngày hôm đó phải có bán trú (có lịch trực được Admin phân công)
+    const pcCount = await PhanCongTrucGV.count({ where: { ngay: reqNgay } });
+    if (pcCount === 0) {
+      return res.status(400).json({ ok: false, error: 'Hôm nay không có lịch bán trú (chưa có phân công trực giáo viên).' });
+    }
 
     const field = loai === 'an' ? 'diem_danh_an' : 'diem_danh_ngu';
     const t = await sequelize.transaction();
@@ -519,6 +577,16 @@ router.post('/api/lichtruc/apply-day-bu/', loginRequired, roleRequired('admin', 
       await t.commit();
       return res.json({ ok: true, message: `Đã nạp lịch Thứ ${sourceThu + 2} vào ngày ${targetDate}. Thêm/cập nhật: ${inserted}, bỏ qua: ${skipped}` });
     } catch (e) { await t.rollback(); throw e; }
+  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** POST /api/lichtruc/clear-day/ - Xóa lịch nguyên 1 ngày (Đánh dấu nghỉ bán trú) */
+router.post('/api/lichtruc/clear-day/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { ngay } = req.body;
+    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
+    const count = await PhanCongTrucGV.destroy({ where: { ngay } });
+    return res.json({ ok: true, message: `Đã xóa toàn bộ ${count} phân công ngày ${ngay}. Hôm nay sẽ không có bán trú.` });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 

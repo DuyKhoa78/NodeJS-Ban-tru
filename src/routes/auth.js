@@ -46,6 +46,7 @@ router.post('/login/', async (req, res) => {
       role:         user.role,
       role_display: roleDisplayMap[user.role] || user.role,
       email:        user.email,
+      avatar_url:   user.avatar_url || null,
       is_active:    user.is_active,
       is_superuser: user.is_superuser,
       // ─── Permission flags (dùng trên frontend để hiện/ẩn menu) ───
@@ -97,11 +98,25 @@ router.post('/logout/', (req, res) => {
  * GET /api/auth/me
  * Trả thông tin user hiện tại đang đăng nhập
  */
-router.get('/api/auth/me', (req, res) => {
+router.get('/api/auth/me', async (req, res) => {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ ok: false, error: 'Chưa đăng nhập' });
   }
-  return res.json({ ok: true, user: req.session.user });
+  try {
+    const user = await StaffUser.findByPk(req.session.userId);
+    if (!user || !user.is_active) {
+      req.session.destroy();
+      return res.status(401).json({ ok: false, error: 'Tài khoản không tồn tại hoặc bị khóa' });
+    }
+    // Update session user fields that might have changed (like avatar_url, fullname, etc.)
+    req.session.user.avatar_url = user.avatar_url;
+    req.session.user.fullname = user.fullname;
+    req.session.user.role = user.role;
+    
+    return res.json({ ok: true, user: req.session.user });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: 'Lỗi máy chủ' });
+  }
 });
 
 module.exports = router;

@@ -2,9 +2,16 @@
   "name": "bantru",
   "version": "1.0.0",
   "description": "Backend Quan ly Ban tru THPT Le Thi Hong Gam",
-  "keywords": ["bantru", "LTHG", "NodeJS", "React"],
+  "keywords": [
+    "bantru",
+    "LTHG",
+    "NodeJS",
+    "React"
+  ],
   "homepage": "https://github.com/DuyKhoa78/NodeJS-Ban-tru#readme",
-  "bugs": { "url": "https://github.com/DuyKhoa78/NodeJS-Ban-tru/issues" },
+  "bugs": {
+    "url": "https://github.com/DuyKhoa78/NodeJS-Ban-tru/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DuyKhoa78/NodeJS-Ban-tru.git"
@@ -19,6 +26,7 @@
     "test": "echo \"Error: no test specified\" && exit 0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.3",
     "bcryptjs": "^2.4.3",
     "connect-pg-simple": "^9.0.1",
     "cors": "^2.8.5",

@@ -40,6 +40,11 @@ const StaffUser = sequelize.define('StaffUser', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  avatar_url: {
+    type: DataTypes.STRING(500),
+    allowNull: true,
+    defaultValue: null,
+  },
   date_joined: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
