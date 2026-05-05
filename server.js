@@ -19,6 +19,9 @@ const nghiepvuRoutes = require('./src/routes/nghiepvu');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Trust proxy để cho phép set secure cookie khi chạy sau Load Balancer của Azure
+app.set('trust proxy', 1);
+
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors({
   origin: true,
