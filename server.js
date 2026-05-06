@@ -23,8 +23,29 @@ const PORT = process.env.PORT || 4000;
 app.set('trust proxy', 1);
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
+// ─── Allowed Origins ─────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  // Vercel production
+  'https://lthg-bantru.vercel.app',
+  // Vercel preview (mọi branch/pr deploy)
+  /\.vercel\.app$/,
+  // Domain tuùy chỉnh (nếu có)
+  process.env.FRONTEND_URL,
+  // Local dev
+  'http://localhost:5173',
+  'http://localhost:3000',
+].filter(Boolean);
+
 app.use(cors({
-  origin: true,
+  origin: (origin, callback) => {
+    // cho phép các request không có origin (Postman, health check)
+    if (!origin) return callback(null, true);
+    const allowed = ALLOWED_ORIGINS.some((o) =>
+      o instanceof RegExp ? o.test(origin) : o === origin
+    );
+    if (allowed) return callback(null, true);
+    callback(new Error(`CORS: Origin ${origin} không được phép`));
+  },
   credentials: true,
 }));
 app.use(express.json());
