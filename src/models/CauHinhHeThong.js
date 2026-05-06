@@ -23,6 +23,7 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
     type: DataTypes.DATEONLY,
     allowNull: true,
   },
+
 }, {
   tableName: 'core_cauhinhhethong',
   timestamps: false,

@@ -424,7 +424,8 @@ router.post('/api/cauhinh/save/', loginRequired, roleRequired('admin', 'quan_ly'
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     const { nam_hoc, nguoi_phu_trach, ten_truong } = req.body;
-    await CauHinhHeThong.upsert({ id: 1, nam_hoc, nguoi_phu_trach, ten_truong, ngay_cap_nhat: new Date().toISOString().split('T')[0] });
+    const updateData = { id: 1, nam_hoc, nguoi_phu_trach, ten_truong, ngay_cap_nhat: new Date().toISOString().split('T')[0] };
+    await CauHinhHeThong.upsert(updateData);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

@@ -18,13 +18,13 @@ const DiemDanhHS = sequelize.define('DiemDanhHS', {
   },
   diem_danh_an: {
     type: DataTypes.INTEGER,
-    defaultValue: 0,
-    comment: '0=CoMat, 1=Vang, 2=Phep',
+    defaultValue: null,
+    comment: '0=CoMat, 1=Vang, 2=Phep, null=Chưa điểm danh',
   },
   diem_danh_ngu: {
     type: DataTypes.INTEGER,
-    defaultValue: 0,
-    comment: '0=CoMat, 1=Vang, 2=Phep',
+    defaultValue: null,
+    comment: '0=CoMat, 1=Vang, 2=Phep, null=Chưa điểm danh',
   },
   ghi_chu: {
     type: DataTypes.STRING(255),
