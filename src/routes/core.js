@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { Op } = require('sequelize');
 const NodeCache = require('node-cache');
-const { HocSinh, DiemDanhHS, CauHinhHeThong } = require('../models');
+const { HocSinh, DiemDanhHS, CauHinhHeThong, PhanCongTrucGV, CauHinhTuan, CauHinhNgay } = require('../models');
 const { loginRequired, attachUser } = require('../middleware/auth');
 
 // ── Cache nhẹ cho dữ liệu ít thay đổi (dashboard: 3 phút, cauhinh: 1 giờ) ──
@@ -60,6 +60,29 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
       where: { ma_hs_id: { [Op.in]: hsIds }, ngay: today },
       attributes: ['ma_hs_id', 'diem_danh_an', 'diem_danh_ngu'],
     });
+
+    // Kiểm tra xem hôm nay có lịch bán trú không
+    let hasSchedule = false;
+    const dateObj = new Date(today + 'T00:00:00');
+    const dow = dateObj.getDay();
+    if (dow !== 0 && dow !== 6) {
+      if (dow === 4) {
+        const mon = new Date(dateObj);
+        mon.setDate(dateObj.getDate() - 3);
+        const monStr = mon.toISOString().split('T')[0];
+        const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
+        const showT5 = cauHinhTuan?.show_t5 ?? false;
+        const pcCountT5 = await PhanCongTrucGV.count({ where: { ngay: today } });
+        hasSchedule = showT5 || pcCountT5 > 0;
+      } else {
+        const pcCount = await PhanCongTrucGV.count({ where: { ngay: today } });
+        hasSchedule = pcCount > 0;
+      }
+    }
+    const cauhinhNgay = await CauHinhNgay.findByPk(today);
+    if (cauhinhNgay && cauhinhNgay.is_nghi) {
+      hasSchedule = false;
+    }
 
     const ddMap = {};
     diemDanhToday.forEach(dd => { ddMap[dd.ma_hs_id] = dd; });
@@ -129,6 +152,7 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
       nguoi_phu_trach: cauhinh.nguoi_phu_trach,
       ten_truong: cauhinh.ten_truong,
       ngay_hom_nay: today,
+      has_schedule: hasSchedule,
     });
   } catch (err) {
     console.error('Dashboard error:', err);

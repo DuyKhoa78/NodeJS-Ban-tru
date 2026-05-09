@@ -5,7 +5,7 @@ const ExcelJS = require('exceljs');
 const NodeCache = require('node-cache');
 const {
   HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong,
-  PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan
+  PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
@@ -16,8 +16,9 @@ const {
 
 router.use(attachUser);
 
-// ── In-memory cache (TTL mặc định 30 phút) ──────────────────────────
-const appCache = new NodeCache({ stdTTL: 1800, checkperiod: 300 });
+// ── In-memory cache ──────────────────────────────────────────────────
+// Dữ liệu tĩnh (HS, phòng): TTL 5 phút để đồng bộ kịp thời khi có thay đổi
+const appCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 // Hàm xóa cache liên quan đến dữ liệu HS/phòng (gọi sau khi save/delete)
 function invalidateStaticCaches() {
@@ -59,6 +60,67 @@ router.post('/api/lichtruc/config-tuan/save/', loginRequired, roleRequired('admi
     const monday = getMondayOfWeek(tuan);
     await CauHinhTuan.upsert({ tuan: monday, show_t5 });
     return res.json({ ok: true, message: 'Đã lưu cấu hình tuần' });
+  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// ══════════════════════════════════════════════
+// CẤU HÌNH NGÀY ĐẶC BIỆT
+// ══════════════════════════════════════════════
+
+/** GET /api/cauhinh-ngay/?ngay=YYYY-MM-DD */
+router.get('/api/cauhinh-ngay/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { ngay } = req.query;
+    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
+    const config = await CauHinhNgay.findByPk(ngay);
+    return res.json({ ok: true, config: config ? config.toJSON() : null });
+  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** GET /api/cauhinh-ngay/range/?tu=YYYY-MM-DD&den=YYYY-MM-DD */
+router.get('/api/cauhinh-ngay/range/', loginRequired, async (req, res) => {
+  try {
+    const { tu, den } = req.query;
+    if (!tu || !den) return res.status(400).json({ ok: false, error: 'Thiếu tham số tu/den' });
+    const list = await CauHinhNgay.findAll({
+      where: { ngay: { [Op.between]: [tu, den] } },
+      order: [['ngay', 'ASC']],
+    });
+    // Build map { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru, hs_them_vao, ghi_chu } }
+    const map = {};
+    list.forEach(c => { map[c.ngay] = parseCauHinhNgay(c); });
+    return res.json({ ok: true, map });
+  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** POST /api/cauhinh-ngay/save/ */
+router.post('/api/cauhinh-ngay/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { ngay, lop_ap_dung, hs_loai_tru, hs_them_vao, ghi_chu, phong_tam_an, phong_tam_ngu, lop_phong_an, lop_phong_ngu } = req.body;
+    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
+    await CauHinhNgay.upsert({
+      ngay,
+      lop_ap_dung: lop_ap_dung && lop_ap_dung.length > 0 ? JSON.stringify(lop_ap_dung) : null,
+      hs_loai_tru: hs_loai_tru && hs_loai_tru.length > 0 ? JSON.stringify(hs_loai_tru) : null,
+      hs_them_vao: hs_them_vao && hs_them_vao.length > 0 ? JSON.stringify(hs_them_vao) : null,
+      phong_tam_an: phong_tam_an || null,
+      phong_tam_ngu: phong_tam_ngu || null,
+      // lop_phong_an/ngu: object { '10A1': 'A20', '10A2': 'A20', '10A3': 'A30' }
+      lop_phong_an: lop_phong_an && Object.keys(lop_phong_an).length > 0 ? JSON.stringify(lop_phong_an) : null,
+      lop_phong_ngu: lop_phong_ngu && Object.keys(lop_phong_ngu).length > 0 ? JSON.stringify(lop_phong_ngu) : null,
+      ghi_chu: ghi_chu || null,
+    });
+    return res.json({ ok: true, message: 'Đã lưu cấu hình ngày' });
+  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** POST /api/cauhinh-ngay/delete/ */
+router.post('/api/cauhinh-ngay/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { ngay } = req.body;
+    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
+    await CauHinhNgay.destroy({ where: { ngay } });
+    return res.json({ ok: true, message: 'Đã xóa cấu hình ngày đặc biệt' });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -187,9 +249,53 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu'), asy
       hasSchedule = pcCount > 0;
     }
 
-    return res.json({ ok: true, records, ngay: ngayFilter, has_schedule: hasSchedule });
+    // Trả về kèm cấu hình ngày (có hs_them_vao) cho frontend
+    const cauhinhNgay = await CauHinhNgay.findByPk(ngayFilter);
+    if (cauhinhNgay && cauhinhNgay.is_nghi) {
+      hasSchedule = false;
+    }
+
+    return res.json({
+      ok: true, records, ngay: ngayFilter, has_schedule: hasSchedule,
+      cauhinh_ngay: parseCauHinhNgay(cauhinhNgay),
+    });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
+
+// ─── Helper: lấy thông tin cấu hình ngày đặc biệt dưới dạng plain object ───
+function parseCauHinhNgay(c) {
+  if (!c) return null;
+  return {
+    lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
+    hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
+    hs_them_vao: c.hs_them_vao ? JSON.parse(c.hs_them_vao) : null,
+    phong_tam_an: c.phong_tam_an || null,
+    phong_tam_ngu: c.phong_tam_ngu || null,
+    // lop_phong_an/ngu: object { '10A1': 'A20', '10A2': 'A30' } or null
+    lop_phong_an: c.lop_phong_an ? JSON.parse(c.lop_phong_an) : null,
+    lop_phong_ngu: c.lop_phong_ngu ? JSON.parse(c.lop_phong_ngu) : null,
+    ghi_chu: c.ghi_chu,
+    is_nghi: c.is_nghi || false,
+  };
+}
+
+// ─── Helper: kiểm tra 1 HS có được phép tham gia bán trú ngày đó không ───
+function isHsAllowed(hs, cauhinhNgay) {
+  if (!cauhinhNgay) return true; // Không có cấu hình đặc biệt → toàn trường
+  if (cauhinhNgay.is_nghi) return false; // Toàn trường nghỉ
+  const lopList = cauhinhNgay.lop_ap_dung ? JSON.parse(cauhinhNgay.lop_ap_dung) : null;
+  const hsLoaiTru = cauhinhNgay.hs_loai_tru ? JSON.parse(cauhinhNgay.hs_loai_tru) : null;
+  const hsThemVao = cauhinhNgay.hs_them_vao ? JSON.parse(cauhinhNgay.hs_them_vao) : null;
+  // Nếu được thêm tay (vì dụ: HS ngoài khối) → luôn được phép
+  if (hsThemVao && hsThemVao.some(x => x.id === hs.id)) return true;
+  if (lopList && lopList.length > 0) {
+    if (!lopList.includes(hs.lop)) return false;
+  }
+  if (hsLoaiTru && hsLoaiTru.length > 0) {
+    if (hsLoaiTru.includes(hs.id)) return false;
+  }
+  return true;
+}
 
 /** POST /api/diemdanh/save/ */
 router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
@@ -550,8 +656,10 @@ router.post('/api/lichtruc/apply-khung/', loginRequired, roleRequired('admin', '
         const friday = addDays(monday, 4);
         await PhanCongTrucGV.destroy({
           where: { ngay: { [Op.between]: [monday, friday] } },
-          transaction: t
+          transaction: t,
         });
+        // Xóa cờ is_nghi nếu có
+        await CauHinhNgay.destroy({ where: { ngay: { [Op.between]: [monday, friday] }, is_nghi: true }, transaction: t });
       }
 
       for (let i = 0; i < 5; i++) {
@@ -606,6 +714,9 @@ router.post('/api/lichtruc/apply-day-bu/', loginRequired, roleRequired('admin', 
     let inserted = 0, skipped = 0;
 
     try {
+      // Bỏ cờ is_nghi nếu ngày này đang bị đánh dấu nghỉ
+      await CauHinhNgay.destroy({ where: { ngay: targetDate, is_nghi: true }, transaction: t });
+
       const khung = await LichTrucCoDinh.findAll({
         where: { thu: sourceThu },
         include: [{ association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
@@ -650,7 +761,9 @@ router.post('/api/lichtruc/clear-day/', loginRequired, roleRequired('admin', 'qu
     const { ngay } = req.body;
     if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
     const count = await PhanCongTrucGV.destroy({ where: { ngay } });
-    return res.json({ ok: true, message: `Đã xóa toàn bộ ${count} phân công ngày ${ngay}. Hôm nay sẽ không có bán trú.` });
+    const countDiemDanh = await DiemDanhHS.destroy({ where: { ngay } });
+    await CauHinhNgay.upsert({ ngay, is_nghi: true, lop_ap_dung: null, hs_loai_tru: null, hs_them_vao: null, ghi_chu: null });
+    return res.json({ ok: true, message: `Đã xóa toàn bộ ${count} phân công GV và ${countDiemDanh} điểm danh HS ngày ${ngay}. Hôm nay sẽ nghỉ bán trú.` });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -712,6 +825,29 @@ router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
 
     const records = await DiemDanhHS.findAll({ where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } } });
 
+    // Lấy tất cả cấu hình ngày đặc biệt trong tháng
+    const cauhinhNgayList = await CauHinhNgay.findAll({
+      where: { ngay: { [Op.between]: [start, end] } },
+    });
+    const cauhinhNgayMap = {}; // { 'YYYY-MM-DD': CauHinhNgay }
+    cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+
+    // Lấy tất cả ngày có bán trú ăn trong tháng
+    const pcAnRecords = await PhanCongTrucGV.findAll({
+      where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+      attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+      raw: true,
+    });
+    const ngayBanTruAn = pcAnRecords.map(r => r.ngay).sort();
+
+    // Lấy tất cả ngày có bán trú ngủ trong tháng
+    const pcNguRecords = await PhanCongTrucGV.findAll({
+      where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
+      attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+      raw: true,
+    });
+    const ngayBanTruNgu = pcNguRecords.map(r => r.ngay).sort();
+
     const ddMap = {};
     records.forEach(r => {
       if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = [];
@@ -720,8 +856,13 @@ router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
 
     const data = hsList.map(hs => {
       const recs = ddMap[hs.id] || [];
+      // Tính số ngày HS thực sự phải tham gia (loại trừ ngày đặc biệt không dành cho HS đó)
+      const ngayPhai_An = ngayBanTruAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+      const ngayPhai_Ngu = ngayBanTruNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
       return {
         id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
+        so_ngay_phai_di_an: ngayPhai_An.length,
+        so_ngay_phai_di_ngu: ngayPhai_Ngu.length,
         so_ngay_co_mat_an: recs.filter(r => r.diem_danh_an === 0).length,
         so_ngay_vang_an: recs.filter(r => r.diem_danh_an === 1).length,
         so_ngay_phep_an: recs.filter(r => r.diem_danh_an === 2).length,
@@ -764,7 +905,19 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
     });
     const hsIds = hsList.map(h => h.id);
 
-    // 4. Lấy toàn bộ dữ liệu điểm danh ăn trong tháng
+    // 4a. Lấy cấu hình ngày đặc biệt trong tháng (cho export)
+    const cauhinhNgayListAn = await CauHinhNgay.findAll({
+      where: { ngay: { [Op.between]: [start, end] } },
+    });
+    const ngayDacBietMapAn = {};
+    cauhinhNgayListAn.forEach(c => {
+      ngayDacBietMapAn[c.ngay] = {
+        lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
+        hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
+      };
+    });
+
+    // 4b. Lấy toàn bộ dữ liệu điểm danh ăn trong tháng
     const ddRecords = await DiemDanhHS.findAll({
       where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
       attributes: ['ma_hs_id', 'ngay', 'diem_danh_an'],
@@ -816,10 +969,11 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
       thang: `${year}-${String(month).padStart(2, '0')}`,
       so_thang: month,
       so_nam: year,
-      ngay_ban_tru: ngayBanTru,       // Danh sách ngày có bán trú thực tế
-      tong_buoi_bantru: ngayBanTru.length, // Tổng buổi ăn chính xác
+      ngay_ban_tru: ngayBanTru,
+      tong_buoi_bantru: ngayBanTru.length,
       phong_list: phongList.map(p => p.ma_phong),
-      data: dataByPhong,              // { [ma_phong]: [{ id, ho_ten, lop, ... }] }
+      data: dataByPhong,
+      ngay_dac_biet_map: ngayDacBietMapAn,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
       nam_hoc: cauhinh.nam_hoc,
       nguoi_phu_trach: cauhinh.nguoi_phu_trach,
     });
@@ -855,7 +1009,19 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
     });
     const hsIds = hsList.map(h => h.id);
 
-    // 4. Điểm danh ngủ trong tháng
+    // 4a. Lấy cấu hình ngày đặc biệt trong tháng (cho export ngủ)
+    const cauhinhNgayListNgu = await CauHinhNgay.findAll({
+      where: { ngay: { [Op.between]: [start, end] } },
+    });
+    const ngayDacBietMapNgu = {};
+    cauhinhNgayListNgu.forEach(c => {
+      ngayDacBietMapNgu[c.ngay] = {
+        lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
+        hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
+      };
+    });
+
+    // 4b. Điểm danh ngủ trong tháng
     const ddRecords = await DiemDanhHS.findAll({
       where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
       attributes: ['ma_hs_id', 'ngay', 'diem_danh_ngu'],
@@ -900,8 +1066,129 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
       tong_buoi_bantru: ngayBanTru.length,
       phong_list: phongList.map(p => p.ma_phong),
       data: dataByPhong,
+      ngay_dac_biet_map: ngayDacBietMapNgu,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
       nam_hoc: cauhinh.nam_hoc,
       nguoi_phu_trach: cauhinh.nguoi_phu_trach,
+    });
+  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** GET /api/baocao/tong-hop-lop/?thang=MM&nam=YYYY&lop=
+ *  Xuất tổng hợp số buổi ăn/ngủ thực tế, vắng, phép từng HS theo lớp.
+ *  Dùng để gửi GVCN và thu tiền HS.
+ */
+router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
+  try {
+    const { thang, nam, lop } = req.query;
+    const year = parseInt(nam) || new Date().getFullYear();
+    const month = parseInt(thang) || (new Date().getMonth() + 1);
+    const start = `${year}-${String(month).padStart(2, '0')}-01`;
+    const end = new Date(year, month, 0).toISOString().split('T')[0];
+
+    // 1. Ngày bán trú ăn & ngủ
+    const [pcAn, pcNgu] = await Promise.all([
+      PhanCongTrucGV.findAll({
+        where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+        raw: true,
+      }),
+      PhanCongTrucGV.findAll({
+        where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+        raw: true,
+      }),
+    ]);
+    const ngayAn = pcAn.map(r => r.ngay).sort();
+    const ngayNgu = pcNgu.map(r => r.ngay).sort();
+
+    // 2. Danh sách HS
+    const hsWhere = { dang_hoc: true };
+    if (lop) hsWhere.lop = lop;
+    const hsList = await HocSinh.findAll({
+      where: hsWhere,
+      attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh'],
+      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+    });
+    const hsIds = hsList.map(h => h.id);
+
+    // 3. Cấu hình ngày đặc biệt
+    const cauhinhNgayList = await CauHinhNgay.findAll({
+      where: { ngay: { [Op.between]: [start, end] } },
+    });
+    const cauhinhNgayMap = {};
+    cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+
+    // 4. Records điểm danh
+    const ddRecords = await DiemDanhHS.findAll({
+      where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
+      attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu'],
+    });
+    const ddMap = {};
+    ddRecords.forEach(r => {
+      if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
+      ddMap[r.ma_hs_id][r.ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
+    });
+
+    // 5. Giá ăn/ngủ từ cấu hình giá
+    const giaConfig = await CauHinhGia.findOne({ order: [['id', 'DESC']] });
+    const giaAn = giaConfig?.don_gia_an || 0;
+    const giaNgu = giaConfig?.don_gia_ngu || 0;
+
+    // 6. Tính toán từng HS
+    const data = hsList.map(hs => {
+      const recs = ddMap[hs.id] || {};
+      // Số ngày HS phải tham gia (loại trừ ngày đặc biệt không dành cho HS)
+      const phaiAn = ngayAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+      const phaiNgu = ngayNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+
+      const vangAn  = phaiAn.filter(ng => recs[ng]?.an === 1).length;
+      const phepAn  = phaiAn.filter(ng => recs[ng]?.an === 2).length;
+      const coMatAn = phaiAn.length - vangAn - phepAn; // Thực tế là những buổi có mặt (kể cả chưa chốt điểm danh)
+
+      const vangNgu  = phaiNgu.filter(ng => recs[ng]?.ngu === 1).length;
+      const phepNgu  = phaiNgu.filter(ng => recs[ng]?.ngu === 2).length;
+      const coMatNgu = phaiNgu.length - vangNgu - phepNgu;
+
+      const buoiAnThucTe  = coMatAn;
+      const buoiNguThucTe = coMatNgu;
+      const tienAn  = (phaiAn.length - phepAn) * giaAn; // Vắng không trừ tiền, chỉ phép mới trừ
+      const tienNgu = (phaiNgu.length - phepNgu) * giaNgu;
+
+      return {
+        id: hs.id,
+        ho_ten: hs.ho_ten,
+        lop: hs.lop,
+        gioi_tinh: hs.gioi_tinh,
+        tong_buoi_an: phaiAn.length,
+        co_mat_an: coMatAn,
+        vang_an: vangAn,
+        phep_an: phepAn,
+        tong_buoi_ngu: phaiNgu.length,
+        co_mat_ngu: coMatNgu,
+        vang_ngu: vangNgu,
+        phep_ngu: phepNgu,
+        buoi_an_thuc_te: buoiAnThucTe,
+        buoi_ngu_thuc_te: buoiNguThucTe,
+        tien_an: tienAn,
+        tien_ngu: tienNgu,
+        tong_tien: tienAn + tienNgu,
+      };
+    });
+
+    // 7. Cấu hình hệ thống
+    const [cauhinh] = await CauHinhHeThong.findOrCreate({
+      where: { id: 1 },
+      defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Người phụ trách' }
+    });
+
+    return res.json({
+      ok: true,
+      so_thang: month, so_nam: year,
+      tong_buoi_an: ngayAn.length, tong_buoi_ngu: ngayNgu.length,
+      gia_an: giaAn, gia_ngu: giaNgu,
+      nam_hoc: cauhinh.nam_hoc,
+      nguoi_phu_trach: cauhinh.nguoi_phu_trach,
+      data,
     });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });

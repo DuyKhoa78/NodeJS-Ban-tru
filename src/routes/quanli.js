@@ -106,9 +106,10 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
     const rows = parse(content, { columns: false, skip_empty_lines: true, trim: true });
 
     // Tải trước danh sách phòng hợp lệ để kiểm tra mà không cần query mỗi dòng
-    const allPhong = await Phong.findAll({ attributes: ['ma_phong', 'loai_phong'] });
+    const allPhong = await Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] });
     const phongAnSet  = new Set(allPhong.filter(p => p.loai_phong === 0).map(p => p.ma_phong));
-    const phongNguSet = new Set(allPhong.filter(p => p.loai_phong === 1).map(p => p.ma_phong));
+    const phongNguMap = new Map();
+    allPhong.filter(p => p.loai_phong === 1).forEach(p => phongNguMap.set(p.ma_phong, p));
 
     let success = 0;
     const errors = [];
@@ -171,8 +172,15 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
         }
       }
       if (pNguRaw) {
-        if (phongNguSet.has(pNguRaw)) {
-          ma_phong_ngu_id = pNguRaw;
+        if (phongNguMap.has(pNguRaw)) {
+          const room = phongNguMap.get(pNguRaw);
+          if (room.gioi_tinh === null || room.gioi_tinh === undefined || room.gioi_tinh === gioi_tinh) {
+            ma_phong_ngu_id = pNguRaw;
+          } else {
+            const hsGtStr = gioi_tinh === 0 ? 'Nam' : 'Nữ';
+            const roomGtStr = room.gioi_tinh === 0 ? 'Nam' : 'Nữ';
+            warns.push(`Phòng ngủ "${pNguRaw}" không phù hợp giới tính (phòng ${roomGtStr}, HS ${hsGtStr}) — để trống`);
+          }
         } else {
           warns.push(`Phòng ngủ "${pNguRaw}" không tồn tại trong hệ thống — để trống`);
         }

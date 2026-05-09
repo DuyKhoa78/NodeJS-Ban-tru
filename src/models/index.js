@@ -14,6 +14,7 @@ const DiemDanhPhong = require('./DiemDanhPhong');
 const PhanCongTrucGV = require('./PhanCongTrucGV');
 const LichTrucCoDinh = require('./LichTrucCoDinh');
 const CauHinhTuan = require('./CauHinhTuan');
+const CauHinhNgay = require('./CauHinhNgay');
 
 // ─── Associations ─────────────────────────────────────────────────────────────
 
@@ -68,4 +69,5 @@ module.exports = {
   PhanCongTrucGV,
   LichTrucCoDinh,
   CauHinhTuan,
+  CauHinhNgay,
 };

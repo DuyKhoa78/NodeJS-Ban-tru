@@ -5,7 +5,7 @@ const session = require('express-session');
 const morgan = require('morgan');
 const path = require('path');
 
-const { sequelize } = require('./src/models');
+const { sequelize, CauHinhNgay } = require('./src/models');
 const sessionConfig = require('./src/config/session');
 const errorHandler = require('./src/middleware/errorHandler');
 
@@ -112,6 +112,9 @@ async function startServer() {
   try {
     await sequelize.authenticate();
     console.log('✅ Kết nối database thành công!');
+    // Tự động thêm cột mới nếu thiếu (không xóa dữ liệu)
+    await CauHinhNgay.sync({ alter: true });
+    console.log('✅ Bảng core_cauhinh_ngay sẵn sàng!');
   } catch (err) {
     console.error('⚠️  Lỗi kết nối database:', err.message);
     console.error('   Kiểm tra lại DATABASE_URL trong file .env');
@@ -121,3 +124,5 @@ async function startServer() {
 startServer();
 
 module.exports = app;
+
+// touch
