@@ -762,6 +762,7 @@ router.post('/api/lichtruc/clear-day/', loginRequired, roleRequired('admin', 'qu
     if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
     const count = await PhanCongTrucGV.destroy({ where: { ngay } });
     const countDiemDanh = await DiemDanhHS.destroy({ where: { ngay } });
+    await DiemDanhPhong.destroy({ where: { ngay } });
     await CauHinhNgay.upsert({ ngay, is_nghi: true, lop_ap_dung: null, hs_loai_tru: null, hs_them_vao: null, ghi_chu: null });
     return res.json({ ok: true, message: `Đã xóa toàn bộ ${count} phân công GV và ${countDiemDanh} điểm danh HS ngày ${ngay}. Hôm nay sẽ nghỉ bán trú.` });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
@@ -863,12 +864,12 @@ router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
         id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
         so_ngay_phai_di_an: ngayPhai_An.length,
         so_ngay_phai_di_ngu: ngayPhai_Ngu.length,
-        so_ngay_co_mat_an: recs.filter(r => r.diem_danh_an === 0).length,
-        so_ngay_vang_an: recs.filter(r => r.diem_danh_an === 1).length,
-        so_ngay_phep_an: recs.filter(r => r.diem_danh_an === 2).length,
-        so_ngay_co_mat_ngu: recs.filter(r => r.diem_danh_ngu === 0).length,
-        so_ngay_vang_ngu: recs.filter(r => r.diem_danh_ngu === 1).length,
-        so_ngay_phep_ngu: recs.filter(r => r.diem_danh_ngu === 2).length,
+        so_ngay_co_mat_an: recs.filter(r => r.diem_danh_an === 0 && ngayPhai_An.includes(r.ngay)).length,
+        so_ngay_vang_an: recs.filter(r => r.diem_danh_an === 1 && ngayPhai_An.includes(r.ngay)).length,
+        so_ngay_phep_an: recs.filter(r => r.diem_danh_an === 2 && ngayPhai_An.includes(r.ngay)).length,
+        so_ngay_co_mat_ngu: recs.filter(r => r.diem_danh_ngu === 0 && ngayPhai_Ngu.includes(r.ngay)).length,
+        so_ngay_vang_ngu: recs.filter(r => r.diem_danh_ngu === 1 && ngayPhai_Ngu.includes(r.ngay)).length,
+        so_ngay_phep_ngu: recs.filter(r => r.diem_danh_ngu === 2 && ngayPhai_Ngu.includes(r.ngay)).length,
       };
     });
 
