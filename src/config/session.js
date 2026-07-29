@@ -15,8 +15,11 @@ pool.on('error', (err) => {
   console.error('⚠️  PgSession Pool Error:', err.message);
 });
 
-// Luôn bật Secure + SameSite=None vì Frontend (Vercel) và Backend (Azure) khác domain
-// Trình duyệt sẽ chặn cookie cross-origin nếu thiếu 2 flag này
+// Vercel Rewrites proxy API requests → cookie trở thành first-party (cùng domain)
+// Nên dùng sameSite='lax' (an toàn hơn 'none') + secure=true (HTTPS)
+const isProd = process.env.NODE_ENV === 'production'
+  || (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('supabase'));
+
 const sessionConfig = {
   store: new PgSession({
     pool,
@@ -28,8 +31,8 @@ const sessionConfig = {
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: true,           // BẮT BUỘC để SameSite=None hoạt động
-    sameSite: 'none',       // BẮT BUỘC cho cross-origin (Vercel ↔ Azure)
+    secure: isProd,            // true trên production (HTTPS), false trên localhost (HTTP)
+    sameSite: 'lax',           // 'lax' đủ vì cookie giờ là first-party (cùng domain Vercel)
     maxAge: parseInt(process.env.SESSION_MAX_AGE) || 86400000, // 24h mặc định
   },
 };
