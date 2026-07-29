@@ -33,12 +33,10 @@ router.post('/login/', async (req, res) => {
     req.session.userId = user.id;
     req.session.user   = sessionUser;
 
-    // Thời hạn session
-    if (remember) {
-      req.session.cookie.maxAge = parseInt(process.env.SESSION_REMEMBER_AGE) || 2592000000; // 30 ngày
-    } else {
-      req.session.cookie.maxAge = parseInt(process.env.SESSION_MAX_AGE) || 86400000; // 24 giờ
-    }
+    // Thời hạn session: ghi nhớ 30 ngày nếu chọn "nhớ tôi", ngược lại 24 giờ
+    req.session.cookie.maxAge = remember
+      ? (parseInt(process.env.SESSION_REMEMBER_AGE) || 2592000000)
+      : (parseInt(process.env.SESSION_MAX_AGE) || 86400000);
 
     // Đảm bảo session được ghi thành công vào Database trước khi trả response về cho client (tránh bất đồng bộ làm out đăng nhập)
     return req.session.save((err) => {
