@@ -15,6 +15,8 @@ pool.on('error', (err) => {
   console.error('⚠️  PgSession Pool Error:', err.message);
 });
 
+const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.DATABASE_URL);
+
 const sessionConfig = {
   store: new PgSession({
     pool,
@@ -26,9 +28,9 @@ const sessionConfig = {
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProd,
     maxAge: parseInt(process.env.SESSION_MAX_AGE) || 86400000,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: isProd ? 'none' : 'lax',
   },
 };
 
