@@ -15,10 +15,11 @@ pool.on('error', (err) => {
   console.error('⚠️  PgSession Pool Error:', err.message);
 });
 
-// Vercel Rewrites proxy API requests → cookie trở thành first-party (cùng domain)
-// Nên dùng sameSite='lax' (an toàn hơn 'none') + secure=true (HTTPS)
-const isProd = process.env.NODE_ENV === 'production'
-  || (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('supabase'));
+// Chỉ bật secure cookie khi KHÔNG phải localhost (tức là trên Azure/Vercel production)
+// NODE_ENV=production phải được set trên Azure App Service (Application Settings)
+const isProd = process.env.NODE_ENV === 'production';
+
+console.log(`🔧 Session config: secure=${isProd}, sameSite=lax, NODE_ENV=${process.env.NODE_ENV}`);
 
 const sessionConfig = {
   store: new PgSession({
@@ -31,9 +32,9 @@ const sessionConfig = {
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
-    secure: isProd,            // true trên production (HTTPS), false trên localhost (HTTP)
-    sameSite: 'lax',           // 'lax' đủ vì cookie giờ là first-party (cùng domain Vercel)
-    maxAge: parseInt(process.env.SESSION_MAX_AGE) || 86400000, // 24h mặc định
+    secure: isProd,       // false trên localhost (HTTP), true trên Azure (HTTPS)
+    sameSite: 'lax',      // 'lax' đủ vì Vercel rewrites proxy API → same-origin
+    maxAge: parseInt(process.env.SESSION_MAX_AGE) || 86400000,
   },
 };
 
