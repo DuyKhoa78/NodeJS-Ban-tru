@@ -3,6 +3,8 @@ const router = express.Router();
 const { StaffUser } = require('../models');
 const { verifyPassword, hashPassword } = require('../utils/password');
 
+const { buildSessionUser } = require('../utils/userSession');
+
 /**
  * POST /login/
  * Body: { username, password, remember }
@@ -25,39 +27,7 @@ router.post('/login/', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
 
-    // ─── Tính toán permission flags dựa theo role ───────────────────────────
-    const isAdmin    = user.is_superuser || user.role === 'admin';
-    const isHocVu    = user.role === 'hoc_vu';
-    const isQuanLy   = user.role === 'quan_ly';
-    const isKeToan   = user.role === 'ke_toan';
-
-    const roleDisplayMap = {
-      admin:   'Quản trị viên',
-      hoc_vu:  'Giáo viên / Học vụ',
-      quan_ly: 'Quản lý',
-      ke_toan: 'Kế toán',
-    };
-
-    const sessionUser = {
-      id:           user.id,
-      username:     user.username,
-      fullname:     user.fullname,
-      position:     user.position,
-      role:         user.role,
-      role_display: roleDisplayMap[user.role] || user.role,
-      email:        user.email,
-      avatar_url:   user.avatar_url || null,
-      is_active:    user.is_active,
-      is_superuser: user.is_superuser,
-      // ─── Permission flags (dùng trên frontend để hiện/ẩn menu) ───
-      is_admin:               isAdmin,
-      is_hoc_vu:              isHocVu,
-      is_quan_ly:             isQuanLy,
-      is_ke_toan:             isKeToan,
-      can_diem_danh:          isAdmin || isHocVu,
-      can_quan_ly_danh_muc:   isAdmin || isQuanLy,
-      can_quan_tri:           isAdmin,
-    };
+    const sessionUser = buildSessionUser(user);
 
     // Thiết lập session
     req.session.userId = user.id;
@@ -67,17 +37,30 @@ router.post('/login/', async (req, res) => {
     if (remember) {
       req.session.cookie.maxAge = parseInt(process.env.SESSION_REMEMBER_AGE) || 2592000000;
     } else {
-      req.session.cookie.expires = false; // hết khi đóng browser
+      delete req.session.cookie.maxAge;
     }
 
-    return res.json({
-      ok: true,
-      user: sessionUser,
-      redirect: '/',
+    // Đảm bảo session được ghi thành công vào Database trước khi trả response về cho client (tránh bất đồng bộ làm out đăng nhập)
+    return req.session.save((err) => {
+      if (err) {
+        console.error('Session save error:', err);
+        return res.status(500).json({ ok: false, error: 'Không thể lưu phiên đăng nhập vào hệ thống' });
+      }
+      return res.json({
+        ok: true,
+        user: sessionUser,
+        redirect: '/',
+      });
     });
   } catch (err) {
     console.error('Login error:', err);
-    return res.status(500).json({ ok: false, error: 'Lỗi hệ thống' });
+    if (err.name === 'SequelizeConnectionError' || err.code === 'XX000' || (err.message && (err.message.includes('tenant/user') || err.message.includes('ENOTFOUND')))) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Không thể kết nối Cơ sở dữ liệu (Supabase có thể đang bị tạm dừng - Pause). Vui lòng vào Supabase Dashboard để Restore project.'
+      });
+    }
+    return res.status(500).json({ ok: false, error: 'Lỗi hệ thống: ' + (err.message || 'Không xác định') });
   }
 });
 
@@ -108,12 +91,11 @@ router.get('/api/auth/me', async (req, res) => {
       req.session.destroy();
       return res.status(401).json({ ok: false, error: 'Tài khoản không tồn tại hoặc bị khóa' });
     }
-    // Update session user fields that might have changed (like avatar_url, fullname, etc.)
-    req.session.user.avatar_url = user.avatar_url;
-    req.session.user.fullname = user.fullname;
-    req.session.user.role = user.role;
     
-    return res.json({ ok: true, user: req.session.user });
+    const sessionUser = buildSessionUser(user);
+    req.session.user = sessionUser;
+    
+    return res.json({ ok: true, user: sessionUser });
   } catch (err) {
     return res.status(500).json({ ok: false, error: 'Lỗi máy chủ' });
   }

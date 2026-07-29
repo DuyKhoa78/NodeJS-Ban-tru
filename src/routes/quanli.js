@@ -5,12 +5,28 @@ const { parse } = require('csv-parse/sync');
 const { Op } = require('sequelize');
 const {
   HocSinh, GiaoVien, Phong, MuaVatDung, PhanBoVatDung,
-  CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize
+  CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize, LichSuThaoTac
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 
 router.use(attachUser);
 const upload = multer({ storage: multer.memoryStorage() });
+
+async function recordAuditLog(req, loai, noidung) {
+  try {
+    const user = req.user || req.session?.user || {};
+    await LichSuThaoTac.create({
+      loai,
+      noidung,
+      nguoi_thao_tac_id: user.id || req.session?.userId || null,
+      nguoi_thao_tac_ten: user.fullname || user.username || 'Hệ thống',
+      chuc_vu: user.role_display || user.role || 'N/A',
+      created_at: new Date(),
+    });
+  } catch (e) {
+    console.error('Audit log error:', e.message);
+  }
+}
 
 /** GET /api/nguoidung/quanly/ - List users with manager role */
 router.get('/api/nguoidung/quanly/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
@@ -409,19 +425,41 @@ router.get('/api/cauhinh/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_
   }
 });
 
+/** GET /api/cauhinh/lichsu/ */
+router.get('/api/cauhinh/lichsu/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+  try {
+    const history = await LichSuThaoTac.findAll({
+      where: { loai: 'THIET_LAP' },
+      order: [['created_at', 'DESC']],
+      limit: 50,
+    });
+    return res.json({ ok: true, history });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 /** POST /api/cauhinh/save/ - Body: { an, ngu } */
 router.post('/api/cauhinh/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     const { an, ngu } = req.body;
     const today = new Date().toISOString().split('T')[0];
     const userId = req.session.userId;
+    const changes = [];
 
     if (an !== undefined) {
       await CauHinhGia.upsert({ loai_truc: 0, don_gia: parseFloat(an), ngay_ap_dung: today, nguoi_cap_nhat_id: userId });
+      changes.push(`Đơn giá ăn: ${parseFloat(an).toLocaleString('vi-VN')} đ/suất`);
     }
     if (ngu !== undefined) {
       await CauHinhGia.upsert({ loai_truc: 1, don_gia: parseFloat(ngu), ngay_ap_dung: today, nguoi_cap_nhat_id: userId });
+      changes.push(`Đơn giá ngủ: ${parseFloat(ngu).toLocaleString('vi-VN')} đ/suất`);
     }
+
+    if (changes.length > 0) {
+      await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình giá bán trú: ${changes.join(', ')}`);
+    }
+
     return res.json({ ok: true, message: 'Lưu cấu hình giá thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -434,6 +472,7 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
     const { nam_hoc, nguoi_phu_trach, ten_truong } = req.body;
     const updateData = { id: 1, nam_hoc, nguoi_phu_trach, ten_truong, ngay_cap_nhat: new Date().toISOString().split('T')[0] };
     await CauHinhHeThong.upsert(updateData);
+    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -443,6 +482,20 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
 // ═══════════════════════════════════════════════════════════════════
 // VẬT DỤNG
 // ═══════════════════════════════════════════════════════════════════
+
+/** GET /api/vatdung/lichsu/ */
+router.get('/api/vatdung/lichsu/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+  try {
+    const history = await LichSuThaoTac.findAll({
+      where: { loai: 'VAT_DUNG' },
+      order: [['created_at', 'DESC']],
+      limit: 50,
+    });
+    return res.json({ ok: true, history });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 /** GET /api/vatdung/ */
 router.get('/api/vatdung/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
@@ -465,7 +518,24 @@ router.get('/api/vatdung/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_
 router.post('/api/vatdung/mua/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     const { nam_hoc, lan_mua, loai_vat_dung, so_luong, ngay_mua } = req.body;
-    const item = await MuaVatDung.create({ nam_hoc, lan_mua: parseInt(lan_mua), loai_vat_dung, so_luong: parseInt(so_luong), ngay_mua: ngay_mua || new Date().toISOString().split('T')[0] });
+    const loaiUpper = String(loai_vat_dung || '').toUpperCase();
+    const validLoai = ['CHIEU', 'GOI', 'VO_GOI'];
+    if (!validLoai.includes(loaiUpper)) {
+      return res.status(400).json({ ok: false, error: 'Loại vật dụng không hợp lệ (chỉ chấp nhận: Chiếu, Gối, Áo gối)' });
+    }
+
+    const loaiMap = { CHIEU: 'Chiếu', GOI: 'Gối', VO_GOI: 'Áo gối' };
+
+    const item = await MuaVatDung.create({
+      nam_hoc,
+      lan_mua: parseInt(lan_mua),
+      loai_vat_dung: loaiUpper,
+      so_luong: parseInt(so_luong),
+      ngay_mua: ngay_mua || new Date().toISOString().split('T')[0]
+    });
+
+    await recordAuditLog(req, 'VAT_DUNG', `Thêm lần mua vật dụng: Lần ${lan_mua} (${nam_hoc}) - ${so_luong} ${loaiMap[loaiUpper] || loaiUpper}`);
+
     return res.json({ ok: true, message: 'Thêm lần mua thành công', id: item.id });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -476,7 +546,12 @@ router.post('/api/vatdung/mua/save/', loginRequired, roleRequired('admin', 'quan
 router.post('/api/vatdung/mua/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     const { id } = req.body;
+    const mua = await MuaVatDung.findByPk(id);
     await MuaVatDung.destroy({ where: { id } });
+    if (mua) {
+      const loaiMap = { CHIEU: 'Chiếu', GOI: 'Gối', VO_GOI: 'Áo gối' };
+      await recordAuditLog(req, 'VAT_DUNG', `Xóa lần mua vật dụng Lần ${mua.lan_mua} (${mua.nam_hoc}): ${mua.so_luong} ${loaiMap[mua.loai_vat_dung] || mua.loai_vat_dung}`);
+    }
     return res.json({ ok: true, message: 'Đã xóa' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -496,6 +571,11 @@ router.post('/api/vatdung/phanbo/save/', loginRequired, roleRequired('admin', 'q
     }
 
     await PhanBoVatDung.upsert({ mua_id: parseInt(mua_id), phong_id, so_luong: parseInt(so_luong) });
+
+    const loaiMap = { CHIEU: 'Chiếu', GOI: 'Gối', VO_GOI: 'Áo gối' };
+    const loaiTen = loaiMap[mua.loai_vat_dung] || mua.loai_vat_dung;
+    await recordAuditLog(req, 'VAT_DUNG', `Phân bổ ${so_luong} ${loaiTen} (Lần ${mua.lan_mua} - ${mua.nam_hoc}) cho Phòng ${phong_id}`);
+
     return res.json({ ok: true, message: 'Phân bổ thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -506,7 +586,11 @@ router.post('/api/vatdung/phanbo/save/', loginRequired, roleRequired('admin', 'q
 router.post('/api/vatdung/phanbo/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     const { id } = req.body;
+    const pb = await PhanBoVatDung.findByPk(id);
     await PhanBoVatDung.destroy({ where: { id } });
+    if (pb) {
+      await recordAuditLog(req, 'VAT_DUNG', `Hủy phân bổ ${pb.so_luong} vật dụng của Phòng ${pb.phong_id}`);
+    }
     return res.json({ ok: true, message: 'Đã xóa phân bổ' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

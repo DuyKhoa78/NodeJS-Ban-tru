@@ -16,7 +16,7 @@ const sequelize = new Sequelize(databaseUrl, {
   pool: {
     max: 3,      // Giới hạn thấp để tránh quá tải
     min: 0,
-    acquire: 30000,
+    acquire: 5000, // Hết hạn chờ 5s để báo lỗi ngay, không treo app 30s
     idle: 5000,  // Đóng connection nhanh hơn khi không dùng
     evict: 5000,
   },

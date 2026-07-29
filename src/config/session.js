@@ -8,6 +8,11 @@ const pool = new Pool({
     require: true,
     rejectUnauthorized: false,
   },
+  connectionTimeoutMillis: 5000,
+});
+
+pool.on('error', (err) => {
+  console.error('⚠️  PgSession Pool Error:', err.message);
 });
 
 const sessionConfig = {

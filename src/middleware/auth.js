@@ -1,4 +1,5 @@
 const { StaffUser } = require('../models');
+const { buildSessionUser } = require('../utils/userSession');
 
 /**
  * Middleware: Yêu cầu đăng nhập
@@ -24,36 +25,7 @@ async function attachUser(req, res, next) {
       const user = await StaffUser.findByPk(req.session.userId);
       if (user && user.is_active) {
         req.user = user;
-        const isAdmin    = user.is_superuser || user.role === 'admin';
-        const isHocVu    = user.role === 'hoc_vu';
-        const isQuanLy   = user.role === 'quan_ly';
-        const isKeToan   = user.role === 'ke_toan';
-
-        const roleDisplayMap = {
-          admin:   'Quản trị viên',
-          hoc_vu:  'Giáo viên / Học vụ',
-          quan_ly: 'Quản lý',
-          ke_toan: 'Kế toán',
-        };
-
-        req.session.user = {
-          id: user.id,
-          username: user.username,
-          fullname: user.fullname,
-          position: user.position,
-          role: user.role,
-          role_display: roleDisplayMap[user.role] || user.role,
-          email: user.email,
-          is_active: user.is_active,
-          is_superuser: user.is_superuser,
-          is_admin:               isAdmin,
-          is_hoc_vu:              isHocVu,
-          is_quan_ly:             isQuanLy,
-          is_ke_toan:             isKeToan,
-          can_diem_danh:          isAdmin || isHocVu,
-          can_quan_ly_danh_muc:   isAdmin || isQuanLy,
-          can_quan_tri:           isAdmin,
-        };
+        req.session.user = buildSessionUser(user);
       } else {
         req.session.destroy();
         if (req.path.startsWith('/api/')) {

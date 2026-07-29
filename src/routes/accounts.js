@@ -166,6 +166,38 @@ router.post('/api/profile/save/', loginRequired, async (req, res) => {
 });
 
 /**
+ * POST /api/profile/change-password/
+ * Đổi mật khẩu trực tiếp bằng mật khẩu hiện tại
+ * Body: { current_password, new_password }
+ */
+router.post('/api/profile/change-password/', loginRequired, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) {
+      return res.status(400).json({ ok: false, error: 'Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ ok: false, error: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+    }
+
+    const user = await StaffUser.findByPk(req.session.userId);
+    if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy người dùng' });
+
+    const isValid = await verifyPassword(current_password, user.password);
+    if (!isValid) {
+      return res.status(401).json({ ok: false, error: 'Mật khẩu hiện tại không đúng' });
+    }
+
+    const hashed = await hashPassword(new_password);
+    await user.update({ password: hashed });
+
+    return res.json({ ok: true, message: 'Đổi mật khẩu thành công!' });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/profile/send-otp/
  * Kiểm tra mật khẩu hiện tại → gửi OTP email
  * Body: { current_password, new_password }
