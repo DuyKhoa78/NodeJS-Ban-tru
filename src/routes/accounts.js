@@ -180,7 +180,8 @@ router.post('/api/profile/change-password/', loginRequired, async (req, res) => 
       return res.status(400).json({ ok: false, error: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
     }
 
-    const user = await StaffUser.findByPk(req.session.userId);
+    const userId = req.userId || (req.user && req.user.id) || req.session.userId;
+    const user = await StaffUser.findByPk(userId);
     if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy người dùng' });
 
     const isValid = await verifyPassword(current_password, user.password);

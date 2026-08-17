@@ -9,15 +9,15 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
   },
   nam_hoc: {
     type: DataTypes.STRING(20),
-    defaultValue: '2025-2026',
+    defaultValue: '2026-2027',
   },
   nguoi_phu_trach: {
     type: DataTypes.STRING(100),
-    defaultValue: 'Tạ Thị Diệu Lê',
+    defaultValue: 'T? Th? Di?u L�',
   },
   ten_truong: {
     type: DataTypes.STRING(200),
-    defaultValue: 'LÊ THỊ HỒNG GẤM',
+    defaultValue: 'L� TH? H?NG G?M',
   },
   ngay_cap_nhat: {
     type: DataTypes.DATEONLY,
@@ -30,3 +30,4 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
 });
 
 module.exports = CauHinhHeThong;
+
