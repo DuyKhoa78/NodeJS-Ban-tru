@@ -14,11 +14,11 @@ const sequelize = new Sequelize(databaseUrl, {
   },
   logging: process.env.NODE_ENV === 'development' ? console.log : false,
   pool: {
-    max: 3,      // Giới hạn thấp để tránh quá tải
-    min: 0,
-    acquire: 5000, // Hết hạn chờ 5s để báo lỗi ngay, không treo app 30s
-    idle: 5000,  // Đóng connection nhanh hơn khi không dùng
-    evict: 5000,
+    max: 10,       // Tăng từ 3 lên 10 để xử lý concurrent requests nhanh chóng
+    min: 2,        // Giữ sẵn 2 kết nối warm để không phải chờ TLS handshake
+    acquire: 10000,
+    idle: 30000,   // Giữ kết nối 30s
+    evict: 10000,
   },
   timezone: '+07:00',
 });

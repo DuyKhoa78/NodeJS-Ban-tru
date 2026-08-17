@@ -1,6 +1,10 @@
+const NodeCache = require('node-cache');
 const { StaffUser } = require('../models');
 const { buildSessionUser } = require('../utils/userSession');
 const { verifyToken } = require('../utils/token');
+
+// Cache thông tin user trong 5 phút để tránh query DB trên mọi request
+const userAuthCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 /**
  * Middleware: Attach user vào req.user từ Token (Authorization header) hoặc Session
@@ -13,13 +17,19 @@ async function attachUser(req, res, next) {
     const payload = verifyToken(token);
     if (payload && payload.userId) {
       try {
-        const user = await StaffUser.findByPk(payload.userId);
-        if (user && user.is_active) {
-          const sessionUser = buildSessionUser(user);
+        let sessionUser = userAuthCache.get(payload.userId);
+        if (!sessionUser) {
+          const user = await StaffUser.findByPk(payload.userId);
+          if (user && user.is_active) {
+            sessionUser = buildSessionUser(user);
+            userAuthCache.set(payload.userId, sessionUser);
+          }
+        }
+        if (sessionUser && sessionUser.is_active) {
           req.user = sessionUser;
-          req.userId = user.id;
+          req.userId = payload.userId;
           if (req.session) {
-            req.session.userId = user.id;
+            req.session.userId = payload.userId;
             req.session.user = sessionUser;
           }
           return next();

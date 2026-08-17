@@ -385,13 +385,50 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
   try {
     const tuan = getMondayOfWeek(req.query.tuan);
     const cuoi = addDays(tuan, 6);
-    const [records, gv_list, phong_list, [cauhinh]] = await Promise.all([
-      PhanCongTrucGV.findAll({ where: { ngay: { [Op.between]: [tuan, cuoi] } }, order: [['ngay', 'ASC']] }),
-      GiaoVien.findAll({ where: { dang_lam: true }, attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu', 'lich_ranh'] }),
-      Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] }),
-      CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }),
-    ]);
-    return res.json({ ok: true, records, tuan, gv_list, phong_list, nam_hoc: cauhinh.nam_hoc, nguoi_phu_trach: cauhinh.nguoi_phu_trach, ten_truong: cauhinh.ten_truong });
+
+    let gv_list = appCache.get('gv_active_list');
+    let phong_list = appCache.get('phong_all_list');
+    let cauhinh = appCache.get('cauhinh_hethong');
+
+    const tasks = [
+      PhanCongTrucGV.findAll({ where: { ngay: { [Op.between]: [tuan, cuoi] } }, order: [['ngay', 'ASC']] })
+    ];
+
+    if (!gv_list) {
+      tasks.push(GiaoVien.findAll({ where: { dang_lam: true }, attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu', 'lich_ranh'] }).then(res => {
+        const plain = res.map(r => r.toJSON());
+        appCache.set('gv_active_list', plain);
+        return plain;
+      }));
+    }
+    if (!phong_list) {
+      tasks.push(Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] }).then(res => {
+        const plain = res.map(r => r.toJSON());
+        appCache.set('phong_all_list', plain);
+        return plain;
+      }));
+    }
+    if (!cauhinh) {
+      tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
+        const plain = ch.toJSON();
+        appCache.set('cauhinh_hethong', plain);
+        return plain;
+      }));
+    }
+
+    const results = await Promise.all(tasks);
+    const records = results[0];
+
+    return res.json({
+      ok: true,
+      records,
+      tuan,
+      gv_list: gv_list || appCache.get('gv_active_list') || [],
+      phong_list: phong_list || appCache.get('phong_all_list') || [],
+      nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2025-2026',
+      nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
+      ten_truong: cauhinh?.ten_truong || appCache.get('cauhinh_hethong')?.ten_truong || 'LÊ THỊ HỒNG GẤM'
+    });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
