@@ -33,7 +33,7 @@ const sessionConfig = {
   cookie: {
     httpOnly: true,
     secure: isProd,       // false trên localhost (HTTP), true trên Azure (HTTPS)
-    sameSite: 'lax',      // 'lax' đủ vì Vercel rewrites proxy API → same-origin
+    sameSite: isProd ? 'none' : 'lax', // 'none' trong production để cookie được gửi đầy đủ khi HTTPS
     maxAge: parseInt(process.env.SESSION_MAX_AGE) || 86400000,
   },
 };

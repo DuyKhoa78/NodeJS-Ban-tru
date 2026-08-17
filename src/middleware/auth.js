@@ -1,31 +1,44 @@
 const { StaffUser } = require('../models');
 const { buildSessionUser } = require('../utils/userSession');
+const { verifyToken } = require('../utils/token');
 
 /**
- * Middleware: Yêu cầu đăng nhập
- * - API path → JSON 401
- * - Trang web → redirect /login/
- */
-function loginRequired(req, res, next) {
-  if (!req.session || !req.session.userId) {
-    if (req.path.startsWith('/api/')) {
-      return res.status(401).json({ ok: false, error: 'Chưa đăng nhập' });
-    }
-    return res.redirect('/login/');
-  }
-  next();
-}
-
-/**
- * Middleware: Attach user vào req.user từ session
+ * Middleware: Attach user vào req.user từ Token (Authorization header) hoặc Session
  */
 async function attachUser(req, res, next) {
+  // 1. Kiểm tra Token từ Header Authorization (Bearer <token>)
+  const authHeader = req.headers.authorization || req.headers.Authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    const payload = verifyToken(token);
+    if (payload && payload.userId) {
+      try {
+        const user = await StaffUser.findByPk(payload.userId);
+        if (user && user.is_active) {
+          const sessionUser = buildSessionUser(user);
+          req.user = sessionUser;
+          req.userId = user.id;
+          if (req.session) {
+            req.session.userId = user.id;
+            req.session.user = sessionUser;
+          }
+          return next();
+        }
+      } catch (err) {
+        return next(err);
+      }
+    }
+  }
+
+  // 2. Fallback: Kiểm tra Session Cookie
   if (req.session && req.session.userId && !req.user) {
     try {
       const user = await StaffUser.findByPk(req.session.userId);
       if (user && user.is_active) {
-        req.user = user;
-        req.session.user = buildSessionUser(user);
+        const sessionUser = buildSessionUser(user);
+        req.user = sessionUser;
+        req.userId = user.id;
+        req.session.user = sessionUser;
       } else {
         req.session.destroy();
         if (req.path.startsWith('/api/')) {
@@ -38,6 +51,23 @@ async function attachUser(req, res, next) {
     }
   } else if (req.session && req.session.user) {
     req.user = req.session.user;
+    req.userId = req.session.userId;
+  }
+  next();
+}
+
+/**
+ * Middleware: Yêu cầu đăng nhập
+ * - API path → JSON 401
+ * - Trang web → redirect /login/
+ */
+function loginRequired(req, res, next) {
+  const isAuth = Boolean(req.user || req.userId || (req.session && req.session.userId));
+  if (!isAuth) {
+    if (req.path.startsWith('/api/')) {
+      return res.status(401).json({ ok: false, error: 'Chưa đăng nhập' });
+    }
+    return res.redirect('/login/');
   }
   next();
 }
@@ -66,3 +96,4 @@ function roleRequired(...roles) {
 }
 
 module.exports = { loginRequired, attachUser, roleRequired };
+

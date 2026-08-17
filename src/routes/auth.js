@@ -2,14 +2,13 @@ const express = require('express');
 const router = express.Router();
 const { StaffUser } = require('../models');
 const { verifyPassword, hashPassword } = require('../utils/password');
-
 const { buildSessionUser } = require('../utils/userSession');
+const { generateToken } = require('../utils/token');
 
 /**
- * POST /login/
- * Body: { username, password, remember }
+ * Xử lý Đăng nhập chung cho POST /login/ và POST /api/auth/login
  */
-router.post('/login/', async (req, res) => {
+async function handleLogin(req, res) {
   try {
     const { username, password, remember } = req.body;
 
@@ -29,26 +28,39 @@ router.post('/login/', async (req, res) => {
 
     const sessionUser = buildSessionUser(user);
 
-    // Thiết lập session
-    req.session.userId = user.id;
-    req.session.user   = sessionUser;
-
-    // Thời hạn session: ghi nhớ 30 ngày nếu chọn "nhớ tôi", ngược lại 24 giờ
-    req.session.cookie.maxAge = remember
+    // Thời hạn token & session: ghi nhớ 30 ngày nếu chọn "nhớ tôi", ngược lại 24 giờ
+    const expiresInMs = remember
       ? (parseInt(process.env.SESSION_REMEMBER_AGE) || 2592000000)
       : (parseInt(process.env.SESSION_MAX_AGE) || 86400000);
 
-    // Đảm bảo session được ghi thành công vào Database trước khi trả response về cho client (tránh bất đồng bộ làm out đăng nhập)
-    return req.session.save((err) => {
-      if (err) {
-        console.error('Session save error:', err);
-        return res.status(500).json({ ok: false, error: 'Không thể lưu phiên đăng nhập vào hệ thống' });
+    // Sinh Bearer Token độc lập với cookie (giúp tránh hoàn toàn lỗi chặn Third-Party Cookie)
+    const token = generateToken(user.id, expiresInMs);
+
+    // Thiết lập session (song song cho các môi trường hỗ trợ cookie)
+    if (req.session) {
+      req.session.userId = user.id;
+      req.session.user   = sessionUser;
+      if (req.session.cookie) {
+        req.session.cookie.maxAge = expiresInMs;
       }
-      return res.json({
-        ok: true,
-        user: sessionUser,
-        redirect: '/',
+      return req.session.save((err) => {
+        if (err) {
+          console.error('Session save warning:', err);
+        }
+        return res.json({
+          ok: true,
+          user: sessionUser,
+          token,
+          redirect: '/',
+        });
       });
+    }
+
+    return res.json({
+      ok: true,
+      user: sessionUser,
+      token,
+      redirect: '/',
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -60,38 +72,53 @@ router.post('/login/', async (req, res) => {
     }
     return res.status(500).json({ ok: false, error: 'Lỗi hệ thống: ' + (err.message || 'Không xác định') });
   }
-});
+}
 
 /**
- * POST /logout/
+ * Xử lý Đăng xuất chung
  */
-router.post('/logout/', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ ok: false, error: 'Không thể đăng xuất' });
-    }
-    res.clearCookie('connect.sid');
-    return res.json({ ok: true, redirect: '/login/' });
-  });
-});
+function handleLogout(req, res) {
+  if (req.session) {
+    req.session.destroy(() => {});
+  }
+  res.clearCookie('connect.sid');
+  return res.json({ ok: true, redirect: '/login/' });
+}
+
+// Routes Đăng nhập (hỗ trợ cả đường dẫn cũ và mới /api/auth/login)
+router.post('/login/', handleLogin);
+router.post('/login', handleLogin);
+router.post('/api/login', handleLogin);
+router.post('/api/login/', handleLogin);
+router.post('/api/auth/login', handleLogin);
+router.post('/api/auth/login/', handleLogin);
+
+// Routes Đăng xuất
+router.post('/logout/', handleLogout);
+router.post('/logout', handleLogout);
+router.post('/api/logout', handleLogout);
+router.post('/api/logout/', handleLogout);
+router.post('/api/auth/logout', handleLogout);
+router.post('/api/auth/logout/', handleLogout);
 
 /**
  * GET /api/auth/me
- * Trả thông tin user hiện tại đang đăng nhập
+ * Trả thông tin user hiện tại đang đăng nhập (hỗ trợ cả Token & Session)
  */
 router.get('/api/auth/me', async (req, res) => {
-  if (!req.session || !req.session.userId) {
+  const currentUserId = req.userId || req.user?.id || req.session?.userId;
+  if (!currentUserId) {
     return res.status(401).json({ ok: false, error: 'Chưa đăng nhập' });
   }
   try {
-    const user = await StaffUser.findByPk(req.session.userId);
+    const user = await StaffUser.findByPk(currentUserId);
     if (!user || !user.is_active) {
-      req.session.destroy();
+      if (req.session) req.session.destroy();
       return res.status(401).json({ ok: false, error: 'Tài khoản không tồn tại hoặc bị khóa' });
     }
     
     const sessionUser = buildSessionUser(user);
-    req.session.user = sessionUser;
+    if (req.session) req.session.user = sessionUser;
     
     return res.json({ ok: true, user: sessionUser });
   } catch (err) {
@@ -100,3 +127,4 @@ router.get('/api/auth/me', async (req, res) => {
 });
 
 module.exports = router;
+
