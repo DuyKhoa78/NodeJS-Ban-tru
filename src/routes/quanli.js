@@ -515,7 +515,7 @@ router.get('/api/vatdung/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_
 });
 
 /** POST /api/vatdung/mua/save/ */
-router.post('/api/vatdung/mua/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.post('/api/vatdung/mua/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { nam_hoc, lan_mua, loai_vat_dung, so_luong, ngay_mua } = req.body;
     const loaiUpper = String(loai_vat_dung || '').toUpperCase();
@@ -543,7 +543,7 @@ router.post('/api/vatdung/mua/save/', loginRequired, roleRequired('admin', 'quan
 });
 
 /** POST /api/vatdung/mua/delete/ */
-router.post('/api/vatdung/mua/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.post('/api/vatdung/mua/delete/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { id } = req.body;
     const mua = await MuaVatDung.findByPk(id);
@@ -559,7 +559,7 @@ router.post('/api/vatdung/mua/delete/', loginRequired, roleRequired('admin', 'qu
 });
 
 /** POST /api/vatdung/phanbo/save/ */
-router.post('/api/vatdung/phanbo/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.post('/api/vatdung/phanbo/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { mua_id, phong_id, so_luong } = req.body;
     const mua = await MuaVatDung.findByPk(mua_id, { include: ['phan_bo'] });
@@ -583,7 +583,7 @@ router.post('/api/vatdung/phanbo/save/', loginRequired, roleRequired('admin', 'q
 });
 
 /** POST /api/vatdung/phanbo/delete/ */
-router.post('/api/vatdung/phanbo/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.post('/api/vatdung/phanbo/delete/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { id } = req.body;
     const pb = await PhanBoVatDung.findByPk(id);
