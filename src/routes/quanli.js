@@ -418,7 +418,11 @@ router.get('/api/cauhinh/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_
   try {
     const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0 }, order: [['ngay_ap_dung', 'DESC']] });
     const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1 }, order: [['ngay_ap_dung', 'DESC']] });
-    const [hethong] = await CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } });
+    const [hethong] = await CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } });
+    if (hethong.nam_hoc === '2025-2026') {
+      hethong.nam_hoc = '2026-2027';
+      await hethong.save();
+    }
     return res.json({ ok: true, gia_an: giaAn, gia_ngu: giaNgu, he_thong: hethong });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

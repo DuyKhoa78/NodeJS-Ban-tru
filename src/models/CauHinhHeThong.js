@@ -9,7 +9,7 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
   },
   nam_hoc: {
     type: DataTypes.STRING(20),
-    defaultValue: '2025-2026',
+    defaultValue: '2026-2027',
   },
   nguoi_phu_trach: {
     type: DataTypes.STRING(100),

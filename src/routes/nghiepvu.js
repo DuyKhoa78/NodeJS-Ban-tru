@@ -400,7 +400,7 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
       }));
     }
     if (!cauhinh) {
-      tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
+      tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
         const plain = ch.toJSON();
         appCache.set('cauhinh_hethong', plain);
         return plain;
@@ -416,7 +416,7 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
       tuan,
       gv_list: gv_list || appCache.get('gv_active_list') || [],
       phong_list: phong_list || appCache.get('phong_all_list') || [],
-      nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2025-2026',
+      nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2026-2027',
       nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
       ten_truong: cauhinh?.ten_truong || appCache.get('cauhinh_hethong')?.ten_truong || 'LÊ THỊ HỒNG GẤM'
     });
@@ -990,7 +990,7 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
     // 6. Lấy cấu hình hệ thống
     const [cauhinh] = await CauHinhHeThong.findOrCreate({
       where: { id: 1 },
-      defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Người phụ trách' }
+      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
     });
 
     return res.json({
@@ -1084,7 +1084,7 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
     // 6. Cấu hình hệ thống
     const [cauhinh] = await CauHinhHeThong.findOrCreate({
       where: { id: 1 },
-      defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Người phụ trách' }
+      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
     });
 
     return res.json({
@@ -1207,7 +1207,7 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
     // 7. Cấu hình hệ thống
     const [cauhinh] = await CauHinhHeThong.findOrCreate({
       where: { id: 1 },
-      defaults: { nam_hoc: '2025-2026', nguoi_phu_trach: 'Người phụ trách' }
+      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
     });
 
     return res.json({
