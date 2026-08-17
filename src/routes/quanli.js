@@ -414,7 +414,7 @@ router.post('/api/phong/delete/', loginRequired, roleRequired('admin'), async (r
 // ═══════════════════════════════════════════════════════════════════
 
 /** GET /api/cauhinh/ */
-router.get('/api/cauhinh/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+router.get('/api/cauhinh/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hoc_vu', 'giao_vien'), async (req, res) => {
   try {
     const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0 }, order: [['ngay_ap_dung', 'DESC']] });
     const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1 }, order: [['ngay_ap_dung', 'DESC']] });

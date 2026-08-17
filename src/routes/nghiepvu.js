@@ -68,7 +68,7 @@ router.post('/api/lichtruc/config-tuan/save/', loginRequired, roleRequired('admi
 // ══════════════════════════════════════════════
 
 /** GET /api/cauhinh-ngay/?ngay=YYYY-MM-DD */
-router.get('/api/cauhinh-ngay/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.get('/api/cauhinh-ngay/', loginRequired, roleRequired('admin', 'quan_ly', 'hoc_vu', 'ke_toan', 'giao_vien'), async (req, res) => {
   try {
     const { ngay } = req.query;
     if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
@@ -129,7 +129,7 @@ router.post('/api/cauhinh-ngay/delete/', loginRequired, roleRequired('admin', 'q
 // ══════════════════════════════════════════════
 
 /** GET /api/phong/:loai - loai=an|ngu */
-router.get('/api/phong/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly'), async (req, res) => {
+router.get('/api/phong/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
   try {
     const loaiStr = req.params.loai; // 'an' | 'ngu'
     const loai = loaiStr === 'an' ? 0 : 1;
@@ -150,7 +150,7 @@ router.get('/api/phong/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'q
 });
 
 /** GET /api/hocsinh/:loai - loai=an|ngu */
-router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
+router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
   try {
     const loai = req.params.loai;
     const cacheKey = 'hocsinh_full';
@@ -307,32 +307,23 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
 
     const reqNgay = records[0].ngay;
 
-    // Lấy thời gian hiện tại theo múi giờ Việt Nam
-    const now = new Date();
-    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(now);
-    
-    // // Ràng buộc 1: Chỉ cho phép điểm danh đúng ngày hiện tại
-    // if (reqNgay > todayStr) {
-    //   return res.status(400).json({ ok: false, error: 'Chưa tới ngày điểm danh.' });
-    // }
-    // if (reqNgay < todayStr) {
-    //   return res.status(400).json({ ok: false, error: 'Đã qua ngày điểm danh. Không thể điểm danh bù.' });
-    // }
-
-    // // Ràng buộc 2: Thời gian từ 10:55 đến 14:00
-    // const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
-    // const [vnHour, vnMinute] = timeStr.split(':').map(Number);
-    // const totalMins = vnHour * 60 + vnMinute;
-    // if (totalMins < 655 || totalMins > 840) { // 10*60+55 = 655, 14*60 = 840
-    //   return res.status(400).json({ ok: false, error: 'Hệ thống chỉ cho phép điểm danh trong khung giờ từ 10:55 đến 14:00.' });
-    // }
-
-    // // Ràng buộc 3: Ngày hôm đó phải có lịch trực tương ứng được Admin phân công
-    // const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
-    // const pcCount = await PhanCongTrucGV.count({ where: { ngay: reqNgay, loai_truc: loaiTrucQuery } });
-    // if (pcCount === 0) {
-    //   return res.status(400).json({ ok: false, error: 'Hôm nay không có lịch bán trú (chưa có phân công trực giáo viên).' });
-    // }
+    // Kiểm tra quyền và khung giờ điểm danh:
+    // Admin/Superuser có thể điểm danh bất kỳ lúc nào.
+    // Học vụ (hoc_vu) chỉ được điểm danh trong khung giờ từ 11:00 đến 14:00.
+    const isSpecialAdmin = Boolean(req.user?.is_admin || req.user?.is_superuser);
+    if (!isSpecialAdmin) {
+      const now = new Date();
+      const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+      const [vnHour, vnMinute] = timeStr.split(':').map(Number);
+      const totalMins = vnHour * 60 + vnMinute;
+      // 11h00 = 660 mins, 14h00 = 840 mins
+      if (totalMins < 660 || totalMins > 840) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 11:00 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.' 
+        });
+      }
+    }
 
     const field = loai === 'an' ? 'diem_danh_an' : 'diem_danh_ngu';
     const t = await sequelize.transaction();
@@ -1231,16 +1222,22 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
-/** GET /api/baocao/luong-gv/?thang=&nam= */
+/** GET /api/baocao/luong-gv/?tu_ngay=&den_ngay=&thang=&nam= */
 router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
   try {
-    const year = req.query.nam || new Date().getFullYear();
-    const month = req.query.thang || (new Date().getMonth() + 1);
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+    let start, end;
+    if (req.query.tu_ngay && req.query.den_ngay) {
+      start = req.query.tu_ngay;
+      end = req.query.den_ngay;
+    } else {
+      const year = req.query.nam || new Date().getFullYear();
+      const month = req.query.thang || (new Date().getMonth() + 1);
+      start = `${year}-${String(month).padStart(2, '0')}-01`;
+      end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+    }
 
     const phanCong = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] }, xac_nhan_truc: true },
+      where: { ngay: { [Op.between]: [start, end] } },
       include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }],
     });
 
@@ -1253,12 +1250,37 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
     const gvMap = {};
     phanCong.forEach(pc => {
       const id = pc.ma_gv_id;
-      if (!gvMap[id]) gvMap[id] = { id, ho_ten: pc.giao_vien?.ho_ten || '', so_ca_an: 0, so_ca_ngu: 0, tong_tien: 0 };
-      if (pc.loai_truc === 0) { gvMap[id].so_ca_an++; gvMap[id].tong_tien += don_gia_an; }
-      else { gvMap[id].so_ca_ngu++; gvMap[id].tong_tien += don_gia_ngu; }
-    });
+      if (!gvMap[id]) gvMap[id] = { 
+        id, 
+        ho_ten: pc.giao_vien?.ho_ten || '', 
+        so_ca_an: 0, 
+        so_ca_ngu: 0, 
+        tong_tien: 0, 
+        ngay_an: [], 
+        ngay_ngu: []
+      };
 
-    return res.json({ ok: true, data: Object.values(gvMap), don_gia_an, don_gia_ngu, thang: `${year}-${month}` });
+      if (pc.loai_truc === 0) { 
+        gvMap[id].so_ca_an++; 
+        gvMap[id].tong_tien += don_gia_an; 
+        gvMap[id].ngay_an.push(pc.ngay);
+      } else { 
+        gvMap[id].so_ca_ngu++; 
+        gvMap[id].tong_tien += don_gia_ngu; 
+        gvMap[id].ngay_ngu.push(pc.ngay);
+      }
+    });
+    const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
+    const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
+
+    return res.json({ 
+      ok: true, 
+      data: Object.values(gvMap), 
+      don_gia_an, 
+      don_gia_ngu, 
+      quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
+      ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
+    });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
