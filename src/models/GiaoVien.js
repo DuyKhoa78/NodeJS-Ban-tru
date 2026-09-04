@@ -19,7 +19,6 @@ const GiaoVien = sequelize.define('GiaoVien', {
   so_dien_thoai: {
     type: DataTypes.STRING(15),
     allowNull: true,
-    unique: true,
   },
   nhiem_vu: {
     type: DataTypes.INTEGER,
@@ -34,6 +33,12 @@ const GiaoVien = sequelize.define('GiaoVien', {
     type: DataTypes.JSONB,
     defaultValue: [false, false, false, false, false],
     comment: '[T2,T3,T4,T5,T6] - true nếu rảnh',
+  },
+  ma_bao_mat: {
+    type: DataTypes.STRING(10),
+    allowNull: true,
+    unique: true,
+    comment: 'Mã 5 ký tự bảo mật riêng của GV khi gửi Google Form báo cáo trực',
   },
 }, {
   tableName: 'quanli_giaovien',

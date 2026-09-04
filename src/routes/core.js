@@ -66,15 +66,17 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
     const dateObj = new Date(today + 'T00:00:00');
     const dow = dateObj.getDay();
     if (dow !== 0 && dow !== 6) {
-      if (dow === 4) {
+      if (dow === 5) {
+        // Thứ 6: có lịch nếu cờ show_t6 = true HOẶC đã có GV được phân công thực tế
         const mon = new Date(dateObj);
-        mon.setDate(dateObj.getDate() - 3);
+        mon.setDate(dateObj.getDate() - 4);
         const monStr = mon.toISOString().split('T')[0];
         const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
-        const showT5 = cauHinhTuan?.show_t5 ?? false;
-        const pcCountT5 = await PhanCongTrucGV.count({ where: { ngay: today } });
-        hasSchedule = showT5 || pcCountT5 > 0;
+        const showT6 = cauHinhTuan?.show_t6 ?? false;
+        const pcCountT6 = await PhanCongTrucGV.count({ where: { ngay: today } });
+        hasSchedule = showT6 || pcCountT6 > 0;
       } else {
+        // T2-T5: học bán trú bình thường, kiểm tra phân công trực
         const pcCount = await PhanCongTrucGV.count({ where: { ngay: today } });
         hasSchedule = pcCount > 0;
       }

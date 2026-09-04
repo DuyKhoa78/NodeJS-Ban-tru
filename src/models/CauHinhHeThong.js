@@ -23,6 +23,11 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
     type: DataTypes.DATEONLY,
     allowNull: true,
   },
+  ma_bao_mat_gv: {
+    type: DataTypes.STRING(10),
+    defaultValue: 'BT789',
+    comment: 'Mã bảo mật 5 ký tự báo cáo trực GV',
+  },
 
 }, {
   tableName: 'core_cauhinhhethong',

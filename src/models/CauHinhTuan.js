@@ -10,6 +10,10 @@ const CauHinhTuan = sequelize.define('CauHinhTuan', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  show_t6: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
 }, {
   tableName: 'core_cauhinh_tuan',
   timestamps: false,

@@ -121,43 +121,83 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
     const content = req.file.buffer.toString('utf8');
     const rows = parse(content, { columns: false, skip_empty_lines: true, trim: true });
 
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ ok: false, error: 'File CSV rỗng hoặc không có dữ liệu.' });
+    }
+
+    // Kiểm tra xem người dùng có nộp nhầm file Danh sách Giáo viên không
+    const headerStr = rows[0].map(c => String(c).toLowerCase()).join(' ');
+    if (headerStr.includes('mã bảo mật') || headerStr.includes('số điện thoại') || headerStr.includes('mã gv')) {
+      return res.status(400).json({
+        ok: false,
+        error: 'File tải lên là "Danh sách Giáo viên" (có cột Mã bảo mật / SĐT), không phải danh sách Học sinh! Vui lòng chọn đúng file Học sinh hoặc tải file mẫu CSV.'
+      });
+    }
+
     // Tải trước danh sách phòng hợp lệ để kiểm tra mà không cần query mỗi dòng
     const allPhong = await Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] });
     const phongAnSet  = new Set(allPhong.filter(p => p.loai_phong === 0).map(p => p.ma_phong));
     const phongNguMap = new Map();
     allPhong.filter(p => p.loai_phong === 1).forEach(p => phongNguMap.set(p.ma_phong, p));
 
+    // Nhận diện cột linh hoạt từ dòng tiêu đề
+    let colMap = {
+      stt: 0,
+      ma_so_bt: 1,
+      ho_ten: 2,
+      gioi_tinh: 3,
+      lop: 4,
+      phong_ngu: 5,
+      phong_an: 6,
+      ghi_chu: 7
+    };
+
+    let startIdx = 0;
+    const isFirstRowHeader = String(rows[0][0]).toLowerCase().includes('stt') || isNaN(Number(rows[0][0]));
+    if (isFirstRowHeader) {
+      startIdx = 1;
+      const hRow = rows[0].map(c => String(c).trim().toLowerCase());
+      hRow.forEach((col, idx) => {
+        if (col.includes('mã') || col.includes('mshs') || col === 'id') colMap.ma_so_bt = idx;
+        else if (col.includes('họ') || col.includes('tên')) colMap.ho_ten = idx;
+        else if (col.includes('giới tính') || col === 'gt') colMap.gioi_tinh = idx;
+        else if (col.includes('lớp')) colMap.lop = idx;
+        else if (col.includes('ngủ')) colMap.phong_ngu = idx;
+        else if (col.includes('ăn')) colMap.phong_an = idx;
+        else if (col.includes('ghi chú')) colMap.ghi_chu = idx;
+      });
+    }
+
     let success = 0;
     const errors = [];
 
-    for (let i = 0; i < rows.length; i++) {
+    for (let i = startIdx; i < rows.length; i++) {
       const row = rows[i];
       const rowNum = i + 1;
 
-      // Bỏ qua dòng header
-      if (i === 0 && (String(row[0]).toLowerCase() === 'stt' || isNaN(Number(row[0])))) continue;
-
-      const [, ma_so_bt, ho_ten, gt_raw, lop, phong_ngu_raw, phong_an_raw, ghi_chu] = row;
+      const ma_so_bt = row[colMap.ma_so_bt];
+      const ho_ten = row[colMap.ho_ten];
+      const gt_raw = row[colMap.gioi_tinh];
+      const lop = row[colMap.lop];
+      const phong_ngu_raw = row[colMap.phong_ngu];
+      const phong_an_raw = row[colMap.phong_an];
+      const ghi_chu = row[colMap.ghi_chu];
 
       // Validate bắt buộc
-      if (!ma_so_bt || !String(ma_so_bt).trim()) {
-        errors.push({ row: rowNum, msg: 'Thiếu mã bán trú — bỏ qua dòng này' });
-        continue;
-      }
       if (!ho_ten || !String(ho_ten).trim()) {
-        errors.push({ row: rowNum, msg: `Mã BT ${ma_so_bt}: Thiếu họ tên học sinh — bỏ qua` });
+        errors.push({ row: rowNum, msg: 'Thiếu họ tên học sinh — bỏ qua dòng này' });
         continue;
       }
       if (!lop || !String(lop).trim()) {
-        errors.push({ row: rowNum, msg: `Mã BT ${ma_so_bt}: Thiếu lớp — bỏ qua` });
+        errors.push({ row: rowNum, msg: `Học sinh "${ho_ten}": Thiếu lớp — bỏ qua` });
         continue;
       }
 
-      // Validate mã BT phải là số nguyên dương
-      const idHS = parseInt(ma_so_bt);
-      if (!idHS || idHS <= 0) {
-        errors.push({ row: rowNum, msg: `Mã BT "${ma_so_bt}" không hợp lệ (phải là số nguyên dương) — bỏ qua` });
-        continue;
+      // Validate hoặc tự sinh mã BT
+      let idHS = parseInt(ma_so_bt);
+      if (!idHS || isNaN(idHS) || idHS <= 0) {
+        const maxHs = (await HocSinh.max('id')) || 1000;
+        idHS = maxHs + 1;
       }
 
       // Kiểm tra trùng mã BT
@@ -240,16 +280,27 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
 // GIÁO VIÊN
 // ═══════════════════════════════════════════════════════════════════
 
-/** GET /api/giaovien/ */
+/** GET /api/giaovien/ - Danh sách toàn bộ giáo viên */
 router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
-    const { q, page = 1, limit: limitParam } = req.query;
-    const limit = Math.min(parseInt(limitParam) || 30, 500);
-    const offset = (parseInt(page) - 1) * limit;
-    const where = { dang_lam: true }; // Chỉ lấy GV đang làm
-    if (q) where.ho_ten = { [Op.iLike]: `%${q}%` };
+    const { page = 1, limit = 1000 } = req.query;
+    const offset = (page - 1) * limit;
+    const { rows, count } = await GiaoVien.findAndCountAll({
+      order: [['ho_ten', 'ASC']],
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+    });
 
-    const { count, rows } = await GiaoVien.findAndCountAll({ where, limit, offset, order: [['ho_ten', 'ASC']] });
+    // Đảm bảo tất cả GV đều có mã bảo mật 5 ký tự duy nhất
+    const batchAssignedCodes = new Set();
+    for (const gv of rows) {
+      if (!gv.ma_bao_mat) {
+        gv.ma_bao_mat = await generateUniqueTeacherCode(batchAssignedCodes);
+        await gv.save();
+      } else {
+        batchAssignedCodes.add(gv.ma_bao_mat.toUpperCase());
+      }
+    }
 
     // Đếm ca trực tháng hiện tại
     const now = new Date();
@@ -270,24 +321,353 @@ router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), as
   }
 });
 
+// Sinh mã bảo mật 5 ký tự duy nhất cho GV (Đúng 5 ký tự, ví dụ: GV84B, GV927, ...)
+// Kiểm tra chống trùng nhiều tầng: DB hiện có, mã Master trường, và toàn bộ mã trong phiên nạp hiện tại
+async function generateUniqueTeacherCode(assignedSet = null) {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+  // 1. Tập hợp toàn bộ mã đã tồn tại trong CSDL
+  const existingRecords = await GiaoVien.findAll({
+    attributes: ['ma_bao_mat'],
+    where: { ma_bao_mat: { [Op.ne]: null } }
+  });
+  const existingSet = new Set(
+    existingRecords
+      .map(r => r.ma_bao_mat ? String(r.ma_bao_mat).trim().toUpperCase() : null)
+      .filter(Boolean)
+  );
+
+  // 2. Thêm mã bảo mật master của hệ thống (nếu có) để tránh trùng
+  try {
+    const heThong = await CauHinhHeThong.findByPk(1);
+    if (heThong?.ma_bao_mat_gv) {
+      existingSet.add(String(heThong.ma_bao_mat_gv).trim().toUpperCase());
+    }
+  } catch (e) {
+    console.error('Lỗi đọc CauHinhHeThong:', e.message);
+  }
+
+  // 3. Kết hợp với tập mã đã cấp trong cùng phiên import / batch nếu có
+  if (assignedSet instanceof Set) {
+    assignedSet.forEach(c => {
+      if (c) existingSet.add(String(c).trim().toUpperCase());
+    });
+  }
+
+  let code = '';
+  let attempts = 0;
+  const maxPrefixAttempts = 1000;
+
+  // Chiến lược 1: Thử dạng 'GV' + 3 ký tự (VD: GV84B, GV927 - có hơn 32.000 tổ hợp)
+  do {
+    attempts++;
+    let randomPart = '';
+    for (let i = 0; i < 3; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    code = 'GV' + randomPart;
+  } while (existingSet.has(code) && attempts < maxPrefixAttempts);
+
+  // Chiến lược 2: Nếu đã chạm ngưỡng (vô cùng hiếm), chuyển sang 5 ký tự ngẫu nhiên hoàn toàn
+  if (existingSet.has(code)) {
+    attempts = 0;
+    const maxFullAttempts = 2000;
+    do {
+      attempts++;
+      code = '';
+      for (let i = 0; i < 5; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+    } while (existingSet.has(code) && attempts < maxFullAttempts);
+  }
+
+  // Chiến lược 3: Dự phòng tuyệt đối không bao giờ trùng bằng timestamp
+  while (existingSet.has(code)) {
+    const rand = Math.floor(Math.random() * chars.length);
+    code = ('G' + Date.now().toString(36).toUpperCase() + chars[rand]).slice(-5);
+  }
+
+  // 4. Double check với database trực tiếp để bảo vệ trước race-condition
+  const dbCheck = await GiaoVien.findOne({
+    where: { ma_bao_mat: code },
+    attributes: ['id']
+  });
+  if (dbCheck) {
+    existingSet.add(code);
+    if (assignedSet instanceof Set) assignedSet.add(code);
+    return generateUniqueTeacherCode(assignedSet);
+  }
+
+  if (assignedSet instanceof Set) {
+    assignedSet.add(code);
+  }
+
+  return code;
+}
+
 /** POST /api/giaovien/save/ */
 router.post('/api/giaovien/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
-    const { id, ho_ten, gioi_tinh, so_dien_thoai, nhiem_vu, dang_lam, lich_ranh } = req.body;
+    const { id, ho_ten, gioi_tinh, so_dien_thoai, nhiem_vu, dang_lam, lich_ranh, ma_bao_mat } = req.body;
     const data = {
-      ho_ten, gioi_tinh: parseInt(gioi_tinh),
-      so_dien_thoai: so_dien_thoai || null,
-      nhiem_vu: parseInt(nhiem_vu),
+      ho_ten: String(ho_ten).trim(),
+      gioi_tinh: parseInt(gioi_tinh),
+      so_dien_thoai: so_dien_thoai ? String(so_dien_thoai).trim() : null,
+      nhiem_vu: parseInt(nhiem_vu) || 0,
       dang_lam: dang_lam !== undefined ? dang_lam : true,
       lich_ranh: lich_ranh || [false, false, false, false, false],
     };
+
     if (id) {
+      const existingGv = await GiaoVien.findByPk(id);
+      if (!existingGv) return res.status(404).json({ ok: false, error: 'Không tìm thấy giáo viên' });
+
+      if (ma_bao_mat && String(ma_bao_mat).trim().length > 0) {
+        const cleanCode = String(ma_bao_mat).trim().toUpperCase().slice(0, 5);
+        if (cleanCode.length !== 5) {
+          return res.status(400).json({ ok: false, error: 'Mã bảo mật giáo viên phải có đúng 5 ký tự!' });
+        }
+        // Kiểm tra xem mã này đã bị GV khác sử dụng chưa
+        const duplicate = await GiaoVien.findOne({
+          where: { ma_bao_mat: cleanCode, id: { [Op.ne]: id } }
+        });
+        if (duplicate) {
+          return res.status(400).json({ ok: false, error: `Mã bảo mật "${cleanCode}" đã thuộc về giáo viên ${duplicate.ho_ten}. Vui lòng chọn mã khác!` });
+        }
+        // Kiểm tra xem có trùng với mã Master trường không
+        const heThong = await CauHinhHeThong.findByPk(1);
+        if (heThong?.ma_bao_mat_gv && cleanCode === String(heThong.ma_bao_mat_gv).trim().toUpperCase()) {
+          return res.status(400).json({ ok: false, error: `Mã bảo mật "${cleanCode}" trùng với mã Master của toàn trường. Vui lòng chọn mã khác!` });
+        }
+        data.ma_bao_mat = cleanCode;
+      } else if (!existingGv.ma_bao_mat) {
+        data.ma_bao_mat = await generateUniqueTeacherCode();
+      }
+
       await GiaoVien.update(data, { where: { id } });
-      return res.json({ ok: true, message: 'Cập nhật giáo viên thành công' });
+      await recordAuditLog(req, 'GIAO_VIEN', `Cập nhật thông tin giáo viên "${ho_ten}" (ID: ${id})`);
+      return res.json({ ok: true, message: 'Cập nhật giáo viên thành công', ma_bao_mat: data.ma_bao_mat || existingGv.ma_bao_mat });
     } else {
-      const gv = await GiaoVien.create(data);
-      return res.json({ ok: true, message: 'Thêm giáo viên thành công', id: gv.id });
+      let gv = null;
+      if (ma_bao_mat && String(ma_bao_mat).trim().length > 0) {
+        const cleanCode = String(ma_bao_mat).trim().toUpperCase().slice(0, 5);
+        if (cleanCode.length !== 5) {
+          return res.status(400).json({ ok: false, error: 'Mã bảo mật giáo viên phải có đúng 5 ký tự!' });
+        }
+        const duplicate = await GiaoVien.findOne({ where: { ma_bao_mat: cleanCode } });
+        if (duplicate) {
+          return res.status(400).json({ ok: false, error: `Mã bảo mật "${cleanCode}" đã thuộc về giáo viên ${duplicate.ho_ten}. Vui lòng chọn mã khác!` });
+        }
+        const heThong = await CauHinhHeThong.findByPk(1);
+        if (heThong?.ma_bao_mat_gv && cleanCode === String(heThong.ma_bao_mat_gv).trim().toUpperCase()) {
+          return res.status(400).json({ ok: false, error: `Mã bảo mật "${cleanCode}" trùng với mã Master của toàn trường. Vui lòng chọn mã khác!` });
+        }
+        data.ma_bao_mat = cleanCode;
+        gv = await GiaoVien.create(data);
+      } else {
+        // Tự động sinh mã duy nhất có retry nếu có tranh chấp
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            data.ma_bao_mat = await generateUniqueTeacherCode();
+            gv = await GiaoVien.create(data);
+            break;
+          } catch (createErr) {
+            if (createErr.name === 'SequelizeUniqueConstraintError' && attempt < 4) {
+              continue;
+            }
+            throw createErr;
+          }
+        }
+      }
+      if (!gv) {
+        return res.status(500).json({ ok: false, error: 'Không thể tạo giáo viên với mã bảo mật duy nhất. Vui lòng thử lại!' });
+      }
+      await recordAuditLog(req, 'GIAO_VIEN', `Thêm giáo viên mới "${ho_ten}" (Mã Form: ${gv.ma_bao_mat})`);
+      return res.json({ ok: true, message: 'Thêm giáo viên thành công', id: gv.id, ma_bao_mat: gv.ma_bao_mat });
     }
+  } catch (err) {
+    if (err.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({ ok: false, error: 'Số điện thoại hoặc Mã bảo mật đã tồn tại trên hệ thống.' });
+    }
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** POST /api/giaovien/:pk/reset-code/ - Cấp lại mã 5 ký tự mới */
+router.post('/api/giaovien/:pk/reset-code/', loginRequired, roleRequired('admin'), async (req, res) => {
+  try {
+    const gv = await GiaoVien.findByPk(req.params.pk);
+    if (!gv) return res.status(404).json({ ok: false, error: 'Không tìm thấy giáo viên' });
+
+    let newCode;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        newCode = await generateUniqueTeacherCode();
+        gv.ma_bao_mat = newCode;
+        await gv.save();
+        break;
+      } catch (saveErr) {
+        if (saveErr.name === 'SequelizeUniqueConstraintError' && attempt < 4) {
+          continue;
+        }
+        throw saveErr;
+      }
+    }
+
+    await recordAuditLog(req, 'GIAO_VIEN', `Cấp lại mã bảo mật Form mới cho GV "${gv.ho_ten}": ${newCode}`);
+    return res.json({ ok: true, message: 'Cấp mã bảo mật mới thành công', ma_bao_mat: newCode });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** POST /api/giaovien/import/ - Import GV từ CSV và tự sinh mã 5 ký tự không trùng lặp */
+router.post('/api/giaovien/import/', loginRequired, roleRequired('admin'), upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Chưa có file CSV. Vui lòng chọn file trước khi tải lên.' });
+
+    let rawContent = req.file.buffer.toString('utf8');
+    if (rawContent.charCodeAt(0) === 0xFEFF) {
+      rawContent = rawContent.slice(1);
+    }
+    const rows = parse(rawContent, { columns: false, skip_empty_lines: true, trim: true });
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ ok: false, error: 'File CSV rỗng hoặc không có dữ liệu hợp lệ.' });
+    }
+
+    // Nhận diện cột linh hoạt từ header (nếu có)
+    let headerRowIdx = -1;
+    let colHoTen = -1;
+    let colGioiTinh = -1;
+    let colSDT = -1;
+
+    const normalizeHeader = str => String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    for (let r = 0; r < Math.min(3, rows.length); r++) {
+      const rowNorm = rows[r].map(normalizeHeader);
+      const htIdx = rowNorm.findIndex(c => c.includes('hoten') || c.includes('hovaten') || c.includes('giaovien') || c === 'ten');
+      if (htIdx !== -1 || rowNorm.some(c => c.includes('stt') || c.includes('dienthoai') || c.includes('gioitinh'))) {
+        headerRowIdx = r;
+        colHoTen = htIdx !== -1 ? htIdx : 1;
+        colGioiTinh = rowNorm.findIndex(c => c.includes('gioitinh') || c === 'gt');
+        colSDT = rowNorm.findIndex(c => c.includes('dienthoai') || c.includes('sdt') || c.includes('phone'));
+        break;
+      }
+    }
+
+    // Nếu không tìm thấy header theo từ khóa, suy luận theo vị trí cột mặc định
+    if (headerRowIdx === -1) {
+      const firstRow = rows[0];
+      const isFirstColNumber = !isNaN(Number(firstRow[0])) && Number(firstRow[0]) > 0;
+      if (isFirstColNumber) {
+        colHoTen = 1;
+        colGioiTinh = firstRow.length > 2 ? 2 : -1;
+        colSDT = firstRow.length > 3 ? 3 : -1;
+        headerRowIdx = -1;
+      } else {
+        colHoTen = 0;
+        colGioiTinh = firstRow.length > 1 ? 1 : -1;
+        colSDT = firstRow.length > 2 ? 2 : -1;
+        headerRowIdx = -1;
+      }
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    const errors = [];
+    const createdTeachers = [];
+    const batchAssignedCodes = new Set(); // Cache theo dõi mã trong phiên nạp này
+
+    const startIdx = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
+
+    for (let i = startIdx; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNum = i + 1;
+
+      if (!row || row.length === 0 || row.every(c => !String(c || '').trim())) continue;
+
+      const hoTen = String(colHoTen >= 0 ? row[colHoTen] : row[1] || row[0] || '').trim();
+      if (!hoTen || isNaN(Number(hoTen)) === false) {
+        errors.push({ row: rowNum, msg: 'Thiếu họ tên giáo viên hoặc họ tên không hợp lệ — bỏ qua dòng này' });
+        continue;
+      }
+
+      let gioi_tinh = 0;
+      if (colGioiTinh >= 0 && row[colGioiTinh] !== undefined) {
+        const gtStr = String(row[colGioiTinh] || '').trim().toLowerCase();
+        if (['nữ', 'nu', '1', 'f', 'female'].includes(gtStr)) {
+          gioi_tinh = 1;
+        }
+      }
+
+      let sdt = null;
+      if (colSDT >= 0 && row[colSDT] !== undefined) {
+        let cleanDigits = String(row[colSDT] || '').trim().replace(/\D/g, '');
+        if (cleanDigits.length === 9 && ['3', '5', '7', '8', '9'].includes(cleanDigits[0])) {
+          cleanDigits = '0' + cleanDigits;
+        }
+        if (cleanDigits.length >= 7) {
+          sdt = cleanDigits;
+        }
+      }
+
+      // Kiểm tra GV theo HỌ TÊN (Không so sánh SĐT bằng OR vì số điện thoại có thể trùng lặp hoặc chưa cập nhật)
+      const existing = await GiaoVien.findOne({
+        where: sequelize.where(
+          sequelize.fn('LOWER', sequelize.fn('TRIM', sequelize.col('ho_ten'))),
+          hoTen.toLowerCase()
+        )
+      });
+
+      if (existing) {
+        let changed = false;
+        if (!existing.ma_bao_mat) {
+          existing.ma_bao_mat = await generateUniqueTeacherCode(batchAssignedCodes);
+          changed = true;
+        }
+        batchAssignedCodes.add(existing.ma_bao_mat.toUpperCase());
+
+        if (sdt && !existing.so_dien_thoai) {
+          existing.so_dien_thoai = sdt;
+          changed = true;
+        }
+
+        if (changed) {
+          await existing.save();
+        }
+
+        createdTeachers.push({ id: existing.id, ho_ten: existing.ho_ten, ma_bao_mat: existing.ma_bao_mat, status: 'Đã tồn tại' });
+        updatedCount++;
+        continue;
+      }
+
+      // Giáo viên mới hoàn toàn: Cấp mã 5 ký tự duy nhất
+      const ma_bao_mat = await generateUniqueTeacherCode(batchAssignedCodes);
+      const newGv = await GiaoVien.create({
+        ho_ten: hoTen,
+        gioi_tinh,
+        so_dien_thoai: sdt,
+        nhiem_vu: 0,
+        dang_lam: true,
+        ma_bao_mat,
+        lich_ranh: [false, false, false, false, false],
+      });
+
+      createdTeachers.push({ id: newGv.id, ho_ten: newGv.ho_ten, ma_bao_mat: newGv.ma_bao_mat, status: 'Thêm mới' });
+      createdCount++;
+    }
+
+    const totalProcessed = createdCount + updatedCount;
+    await recordAuditLog(req, 'GIAO_VIEN', `Nhập file GV: Thêm mới ${createdCount} GV, cập nhật ${updatedCount} GV (Lỗi ${errors.length})`);
+    return res.json({
+      ok: true,
+      total: rows.length - (headerRowIdx >= 0 ? 1 : 0),
+      created: createdCount,
+      updated: updatedCount,
+      success: totalProcessed,
+      errors,
+      teachers: createdTeachers
+    });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -473,10 +853,11 @@ router.post('/api/cauhinh/save/', loginRequired, roleRequired('admin', 'quan_ly'
 /** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong } */
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
-    const { nam_hoc, nguoi_phu_trach, ten_truong } = req.body;
+    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv } = req.body;
     const updateData = { id: 1, nam_hoc, nguoi_phu_trach, ten_truong, ngay_cap_nhat: new Date().toISOString().split('T')[0] };
+    if (ma_bao_mat_gv) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
     await CauHinhHeThong.upsert(updateData);
-    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
+    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}", Mã bảo mật GV "${updateData.ma_bao_mat_gv || 'BT789'}"`);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

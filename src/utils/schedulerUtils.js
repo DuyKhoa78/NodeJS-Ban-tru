@@ -175,7 +175,8 @@ function phanCongLichKhung({ phongs, gvAll }) {
 
   const result = [];
 
-  for (let thu = 0; thu < 5; thu++) {
+  // Chỉ tự động phân công Thứ 2 -> Thứ 5 (thu: 0..3). Thứ 6 (thu: 4) mặc định nghỉ bán trú.
+  for (let thu = 0; thu < 4; thu++) {
     const { assignments, gvDuocChon } = phanCongMotNgay({
       thu, phongAn, phongNgu, gvAll, loadMap,
     });

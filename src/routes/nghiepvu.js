@@ -5,7 +5,8 @@ const ExcelJS = require('exceljs');
 const NodeCache = require('node-cache');
 const {
   HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong,
-  PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay
+  PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
+  BaoCaoTruc
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
@@ -48,17 +49,21 @@ router.get('/api/lichtruc/config-tuan/', loginRequired, async (req, res) => {
     if (!tuan) return res.status(400).json({ ok: false, error: 'Thiếu tham số tuần' });
     const monday = getMondayOfWeek(tuan);
     const config = await CauHinhTuan.findByPk(monday);
-    return res.json({ ok: true, config: config || { tuan: monday, show_t5: false } });
+    return res.json({ ok: true, config: config || { tuan: monday, show_t6: false, show_t5: false } });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/config-tuan/save/ */
 router.post('/api/lichtruc/config-tuan/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
-    const { tuan, show_t5 } = req.body;
+    const { tuan, show_t6, show_t5 } = req.body;
     if (!tuan) return res.status(400).json({ ok: false, error: 'Thiếu tham số tuần' });
     const monday = getMondayOfWeek(tuan);
-    await CauHinhTuan.upsert({ tuan: monday, show_t5 });
+    await CauHinhTuan.upsert({
+      tuan: monday,
+      show_t6: show_t6 !== undefined ? show_t6 : false,
+      show_t5: show_t5 !== undefined ? show_t5 : false,
+    });
     return res.json({ ok: true, message: 'Đã lưu cấu hình tuần' });
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
@@ -232,18 +237,18 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu'), asy
     if (dow === 0 || dow === 6) {
       // Cuối tuần không bao giờ có bán trú
       hasSchedule = false;
-    } else if (dow === 4) {
-      // Thứ 5: có lịch nếu cờ show_t5 = true HOẶC đã có GV được phân công thực tế
+    } else if (dow === 5) {
+      // Thứ 6: có lịch nếu cờ show_t6 = true HOẶC đã có GV được phân công thực tế
       const mon = new Date(dateObj);
-      mon.setDate(dateObj.getDate() - 3); // Thứ 5 - 3 = Thứ 2 (đầu tuần)
+      mon.setDate(dateObj.getDate() - 4); // Thứ 6 - 4 = Thứ 2 (đầu tuần)
       const monStr = mon.toISOString().split('T')[0];
       const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
-      const showT5 = cauHinhTuan?.show_t5 ?? false;
+      const showT6 = cauHinhTuan?.show_t6 ?? false;
       const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
-      const pcCountT5 = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
-      hasSchedule = showT5 || pcCountT5 > 0;
+      const pcCountT6 = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
+      hasSchedule = showT6 || pcCountT6 > 0;
     } else {
-      // T2-T4, T6: kiểm tra bình thường theo PhanCong
+      // T2-T5: học bán trú bình thường, kiểm tra theo PhanCong
       const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
       const pcCount = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
       hasSchedule = pcCount > 0;
@@ -460,20 +465,22 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
       }
     }
 
-    // 2. KIỂM TRA TRÙNG LỊCH (Bận ở phòng khác cùng buổi)
-    const busy = await PhanCongTrucGV.findOne({
+    // 2. KIỂM TRA TRÙNG: 1 GV có thể trực nhiều phòng trong cùng ca/ngày.
+    // Chỉ chặn nếu GV đã được thêm vào CHÍNH PHÒNG NÀY trong ca trực này.
+    const alreadyInThisRoom = await PhanCongTrucGV.findOne({
       where: {
         ngay,
         loai_truc: parseInt(loai_truc),
+        ma_phong_id,
         [Op.or]: [
-          { ma_gv_id: targetGvId, ma_gv_truc_thay_id: null }, // Đang trực chính ở phòng khác
-          { ma_gv_truc_thay_id: targetGvId } // Đang trực thay ở phòng khác
+          { ma_gv_id: targetGvId, ma_gv_truc_thay_id: null },
+          { ma_gv_truc_thay_id: targetGvId }
         ],
         id: { [Op.ne]: id || 0 }
       }
     });
-    if (busy) {
-      return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có lịch trực ở phòng ${busy.ma_phong_id} trong cùng buổi này.` });
+    if (alreadyInThisRoom) {
+      return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có trong danh sách phân công tại phòng ${ma_phong_id} trong ca trực này rồi.` });
     }
 
     // RÀNG BUỘC TRỰC THAY
@@ -679,18 +686,19 @@ router.post('/api/lichtruc/apply-khung/', loginRequired, roleRequired('admin', '
     const t = await sequelize.transaction();
     let inserted = 0, skipped = 0;
     try {
-      // Nếu ghi đè, xóa sạch lịch cũ của tuần đó (T2-T6)
+      // Nếu ghi đè, xóa sạch lịch cũ của tuần đó từ Thứ 2 đến Thứ 5 (Thứ 6 không bị ảnh hưởng)
       if (force) {
-        const friday = addDays(monday, 4);
+        const thursday = addDays(monday, 3);
         await PhanCongTrucGV.destroy({
-          where: { ngay: { [Op.between]: [monday, friday] } },
+          where: { ngay: { [Op.between]: [monday, thursday] } },
           transaction: t,
         });
-        // Xóa cờ is_nghi nếu có
-        await CauHinhNgay.destroy({ where: { ngay: { [Op.between]: [monday, friday] }, is_nghi: true }, transaction: t });
+        // Xóa cờ is_nghi nếu có trong khoảng T2-T5
+        await CauHinhNgay.destroy({ where: { ngay: { [Op.between]: [monday, thursday] }, is_nghi: true }, transaction: t });
       }
 
-      for (let i = 0; i < 5; i++) {
+      // Chỉ nạp Thứ 2 -> Thứ 5 (i = 0..3). Thứ 6 là ngày dạy bù / nghỉ, Admin tự thêm khi cần.
+      for (let i = 0; i < 4; i++) {
         const ngay = addDays(monday, i);
         const khung = await LichTrucCoDinh.findAll({
           where: { thu: i },
@@ -1344,6 +1352,215 @@ router.get('/api/lichtruc/export/', loginRequired, roleRequired('admin', 'quan_l
     await wb.xlsx.write(res);
     res.end();
   } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// ══════════════════════════════════════════════
+// BÁO CÁO TRỰC GV TỪ GOOGLE FORM / WEBHOOK
+// ══════════════════════════════════════════════
+
+/** Helper parse ngày chuẩn YYYY-MM-DD */
+function normalizeDateStr(input) {
+  if (!input) return new Date().toISOString().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+  // Format DD/MM/YYYY
+  const parts = String(input).split('/');
+  if (parts.length === 3) {
+    const [d, m, y] = parts;
+    return `${y.padStart(4, '20')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  const parsed = new Date(input);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Helper parse ca trực (0=Ăn trưa, 1=Nghỉ trưa) */
+function normalizeCaTruc(input) {
+  if (input === 0 || input === '0') return 0;
+  if (input === 1 || input === '1') return 1;
+  const str = String(input || '').toLowerCase();
+  if (str.includes('ngủ') || str.includes('nghi') || str.includes('nghỉ')) return 1;
+  return 0; // Mặc định là Ăn
+}
+
+/**
+ * POST /api/webhook/google-form-baocao
+ * Nhận báo cáo tình hình trực của GV qua Google Apps Script Webhook
+ */
+router.post('/api/webhook/google-form-baocao', async (req, res) => {
+  try {
+    const token = req.query.token || req.headers['x-webhook-secret'] || req.body.token || req.body.secret_key;
+    const validSecret = process.env.SESSION_SECRET || 'bantru-lthg-secret-key-2025';
+
+    if (token && token !== validSecret && token !== 'bantru-webhook-2026') {
+      return res.status(403).json({ ok: false, error: 'Mã xác thực Webhook không hợp lệ' });
+    }
+
+    const {
+      ngay,
+      ca_truc,
+      ma_phong,
+      ho_ten_gv,
+      ma_xac_thuc,
+      sdt_xac_nhan,
+      so_hs_vang,
+      danh_sach_vang,
+      hs_vi_pham,
+      danh_sach_vi_pham,
+      tinh_hinh,
+      ghi_chu,
+      nguon,
+    } = req.body;
+
+    if (!ma_phong || !ho_ten_gv) {
+      return res.status(400).json({ ok: false, error: 'Thiếu thông tin bắt buộc: ma_phong hoặc ho_ten_gv' });
+    }
+
+    const ngayChuan = normalizeDateStr(ngay);
+    const caChuan = normalizeCaTruc(ca_truc);
+    const vangNum = parseInt(so_hs_vang, 10) || 0;
+    const maNhap = String(ma_xac_thuc || sdt_xac_nhan || '').trim().toUpperCase();
+    const viPhamContent = String(hs_vi_pham || danh_sach_vi_pham || danh_sach_vang || '').trim();
+
+    // 1. Kiểm tra mã bảo mật 5 ký tự cá nhân của Giáo viên trong CSDL
+    let isHopLe = false;
+    let matchedTeacher = null;
+    let hoTenChuan = String(ho_ten_gv || '').trim();
+
+    if (maNhap) {
+      matchedTeacher = await GiaoVien.findOne({
+        where: { ma_bao_mat: maNhap }
+      });
+
+      if (matchedTeacher) {
+        isHopLe = true;
+        // Chuẩn hóa tên giáo viên theo đúng hồ sơ trong CSDL
+        hoTenChuan = matchedTeacher.ho_ten;
+      } else {
+        // 2. Dự phòng: Kiểm tra với Master Code của hệ thống (nếu dùng mã chung của trường)
+        const heThong = await CauHinhHeThong.findByPk(1);
+        const maHeThong = heThong?.ma_bao_mat_gv ? heThong.ma_bao_mat_gv.trim().toUpperCase() : '';
+        if (maHeThong && maNhap === maHeThong) {
+          isHopLe = true;
+        }
+      }
+    }
+
+    const record = await BaoCaoTruc.create({
+      ngay: ngayChuan,
+      ca_truc: caChuan,
+      ma_phong: String(ma_phong).trim().toUpperCase(),
+      ho_ten_gv: hoTenChuan || (matchedTeacher ? matchedTeacher.ho_ten : 'Giáo viên trực'),
+      ma_xac_thuc: maNhap || null,
+      sdt_xac_nhan: sdt_xac_nhan ? String(sdt_xac_nhan).trim() : null,
+      is_hop_le: isHopLe,
+      so_hs_vang: Math.max(0, vangNum),
+      danh_sach_vang: viPhamContent,
+      tinh_hinh: tinh_hinh ? String(tinh_hinh).trim() : 'Bình thường',
+      ghi_chu: ghi_chu ? String(ghi_chu).trim() : '',
+      nguon: nguon || 'google_form',
+      created_at: new Date(),
+    });
+
+    return res.json({
+      ok: true,
+      message: 'Đã nhận báo cáo ca trực thành công',
+      id: record.id,
+      is_hop_le: isHopLe,
+      data: {
+        ngay: record.ngay,
+        ca_truc: record.ca_truc,
+        ma_phong: record.ma_phong,
+        ho_ten_gv: record.ho_ten_gv,
+      },
+    });
+  } catch (err) {
+    console.error('Lỗi Webhook Báo Cáo GV:', err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/baocaotruc/
+ * Lấy danh sách báo cáo trực GV theo ngày (Admin, Quản lý, Học vụ)
+ */
+router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
+  try {
+    const ngayFilter = req.query.ngay || new Date().toISOString().slice(0, 10);
+    const { ca_truc } = req.query;
+
+    const where = { ngay: ngayFilter };
+    if (ca_truc !== undefined && ca_truc !== '' && ca_truc !== 'all') {
+      where.ca_truc = parseInt(ca_truc, 10);
+    }
+
+    const records = await BaoCaoTruc.findAll({
+      where,
+      order: [['created_at', 'DESC'], ['id', 'DESC']],
+    });
+
+    // Lấy cấu hình hệ thống (để xem mã bảo mật hiện tại)
+    const heThong = await CauHinhHeThong.findByPk(1);
+
+    // Lấy danh sách tất cả phòng để kiểm tra tiến độ nộp báo cáo
+    const allPhong = await Phong.findAll({
+      attributes: ['ma_phong', 'loai_phong', 'suc_chua'],
+      order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']],
+    });
+
+    const reportedRoomsAn = new Set(records.filter(r => r.ca_truc === 0).map(r => r.ma_phong));
+    const reportedRoomsNgu = new Set(records.filter(r => r.ca_truc === 1).map(r => r.ma_phong));
+
+    const phongChuaBaoCaoAn = allPhong
+      .filter(p => p.loai_phong === 0 && !reportedRoomsAn.has(p.ma_phong))
+      .map(p => p.ma_phong);
+
+    const phongChuaBaoCaoNgu = allPhong
+      .filter(p => p.loai_phong === 1 && !reportedRoomsNgu.has(p.ma_phong))
+      .map(p => p.ma_phong);
+
+    const coViPhamRecords = records.filter(r => (r.danh_sach_vang && r.danh_sach_vang.trim()) || (r.so_hs_vang && r.so_hs_vang > 0));
+    const stats = {
+      total: records.length,
+      caAnCount: records.filter(r => r.ca_truc === 0).length,
+      caNguCount: records.filter(r => r.ca_truc === 1).length,
+      coViPhamCount: coViPhamRecords.length,
+      totalVang: records.reduce((sum, r) => sum + (r.so_hs_vang || 0), 0),
+      totalPhongAn: allPhong.filter(p => p.loai_phong === 0).length,
+      totalPhongNgu: allPhong.filter(p => p.loai_phong === 1).length,
+    };
+
+    return res.json({
+      ok: true,
+      ngay: ngayFilter,
+      records,
+      stats,
+      ma_bao_mat_hien_tai: heThong?.ma_bao_mat_gv || 'BT789',
+      phongChuaBaoCaoAn,
+      phongChuaBaoCaoNgu,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/baocaotruc/delete/
+ * Xóa 1 bản ghi báo cáo trực
+ */
+router.post('/api/baocaotruc/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ ok: false, error: 'Thiếu ID bản ghi' });
+
+    const deleted = await BaoCaoTruc.destroy({ where: { id } });
+    if (!deleted) return res.status(404).json({ ok: false, error: 'Không tìm thấy bản ghi' });
+
+    return res.json({ ok: true, message: 'Đã xóa bản ghi báo cáo thành công' });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 module.exports = router;
