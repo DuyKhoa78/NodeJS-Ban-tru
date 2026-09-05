@@ -35,6 +35,12 @@ const PhanCongTrucGV = sequelize.define('PhanCongTrucGV', {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
   },
+  nhiem_vu: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    comment: '0=DiemDanh, 1=GiamSat',
+  },
   // ─── Audit Fields ─────────────────────────────────────────────────
   ngay_cap_nhat: {
     type: DataTypes.DATE,

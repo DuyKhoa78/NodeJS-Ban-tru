@@ -4,3 +4,8 @@ database.sqlite
 *.sqlite
 *.sqlite3
 backup/
+*.log
+.DS_Store
+Thumbs.db
+temp_*
+

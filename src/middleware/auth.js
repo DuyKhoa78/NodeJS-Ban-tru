@@ -16,13 +16,15 @@ async function attachUser(req, res, next) {
     const token = authHeader.slice(7).trim();
     const payload = verifyToken(token);
     if (payload && payload.userId) {
+      const uid = typeof payload.userId === 'object' ? (payload.userId.userId || payload.userId.id) : payload.userId;
+      if (!uid) return next();
       try {
-        let sessionUser = userAuthCache.get(payload.userId);
+        let sessionUser = userAuthCache.get(String(uid));
         if (!sessionUser) {
-          const user = await StaffUser.findByPk(payload.userId);
+          const user = await StaffUser.findByPk(uid);
           if (user && user.is_active) {
             sessionUser = buildSessionUser(user);
-            userAuthCache.set(payload.userId, sessionUser);
+            userAuthCache.set(String(uid), sessionUser);
           }
         }
         if (sessionUser && sessionUser.is_active) {

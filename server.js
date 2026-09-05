@@ -116,6 +116,13 @@ async function startServer() {
     await CauHinhNgay.sync({ alter: true });
     await LichSuThaoTac.sync({ alter: true });
     console.log('✅ Bảng core_cauhinh_ngay & core_lichsuthaotac sẵn sàng!');
+    // Tự động đồng bộ sequence ID tránh xung đột primary key
+    await sequelize.query(`
+      SELECT setval('quanli_hocsinh_id_seq', COALESCE((SELECT MAX(id) FROM quanli_hocsinh), 1), true);
+      SELECT setval('quanli_giaovien_id_seq', COALESCE((SELECT MAX(id) FROM quanli_giaovien), 1), true);
+      SELECT setval('nghiepvu_phancongtrucgv_id_seq', COALESCE((SELECT MAX(id) FROM nghiepvu_phancongtrucgv), 1), true);
+      SELECT setval('accounts_staffuser_id_seq', COALESCE((SELECT MAX(id) FROM accounts_staffuser), 1), true);
+    `).catch(() => {});
   } catch (err) {
     console.error('⚠️  Lỗi kết nối database:', err.message);
     console.error('   Kiểm tra lại DATABASE_URL trong file .env');
@@ -127,3 +134,4 @@ startServer();
 module.exports = app;
 
 // touch
+// refreshed   

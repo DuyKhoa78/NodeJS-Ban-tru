@@ -4,15 +4,15 @@ const { Op } = require('sequelize');
 const ExcelJS = require('exceljs');
 const NodeCache = require('node-cache');
 const {
-  HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong,
-  PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
-  BaoCaoTruc
+    HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong,
+    PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
+    BaoCaoTruc
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
-  phanCongLichKhung,
-  buildPhanCongTuanFromKhung,
-  validateAssignments,
+    phanCongLichKhung,
+    buildPhanCongTuanFromKhung,
+    validateAssignments,
 } = require('../utils/schedulerUtils');
 
 router.use(attachUser);
@@ -23,20 +23,20 @@ const appCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 // Hàm xóa cache liên quan đến dữ liệu HS/phòng (gọi sau khi save/delete)
 function invalidateStaticCaches() {
-  appCache.del(['phong_an', 'phong_ngu', 'hocsinh_full']);
+    appCache.del(['phong_an', 'phong_ngu', 'hocsinh_full']);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────
 function getMondayOfWeek(dateStr) {
-  const d = dateStr ? new Date(dateStr) : new Date();
-  const day = d.getDay() || 7;
-  d.setDate(d.getDate() - day + 1);
-  return d.toISOString().split('T')[0];
+    const d = dateStr ? new Date(dateStr) : new Date();
+    const day = d.getDay() || 7;
+    d.setDate(d.getDate() - day + 1);
+    return d.toISOString().split('T')[0];
 }
 function addDays(dateStr, n) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split('T')[0];
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() + n);
+    return d.toISOString().split('T')[0];
 }
 function toDate(str) { return new Date(str).toISOString().split('T')[0]; }
 
@@ -44,28 +44,28 @@ function toDate(str) { return new Date(str).toISOString().split('T')[0]; }
 
 /** GET /api/lichtruc/config-tuan/?tuan= */
 router.get('/api/lichtruc/config-tuan/', loginRequired, async (req, res) => {
-  try {
-    const { tuan } = req.query;
-    if (!tuan) return res.status(400).json({ ok: false, error: 'Thiếu tham số tuần' });
-    const monday = getMondayOfWeek(tuan);
-    const config = await CauHinhTuan.findByPk(monday);
-    return res.json({ ok: true, config: config || { tuan: monday, show_t6: false, show_t5: false } });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { tuan } = req.query;
+        if (!tuan) return res.status(400).json({ ok: false, error: 'Thiếu tham số tuần' });
+        const monday = getMondayOfWeek(tuan);
+        const config = await CauHinhTuan.findByPk(monday);
+        return res.json({ ok: true, config: config || { tuan: monday, show_t6: false, show_t5: false } });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/config-tuan/save/ */
 router.post('/api/lichtruc/config-tuan/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { tuan, show_t6, show_t5 } = req.body;
-    if (!tuan) return res.status(400).json({ ok: false, error: 'Thiếu tham số tuần' });
-    const monday = getMondayOfWeek(tuan);
-    await CauHinhTuan.upsert({
-      tuan: monday,
-      show_t6: show_t6 !== undefined ? show_t6 : false,
-      show_t5: show_t5 !== undefined ? show_t5 : false,
-    });
-    return res.json({ ok: true, message: 'Đã lưu cấu hình tuần' });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { tuan, show_t6, show_t5 } = req.body;
+        if (!tuan) return res.status(400).json({ ok: false, error: 'Thiếu tham số tuần' });
+        const monday = getMondayOfWeek(tuan);
+        await CauHinhTuan.upsert({
+            tuan: monday,
+            show_t6: show_t6 !== undefined ? show_t6 : false,
+            show_t5: show_t5 !== undefined ? show_t5 : false,
+        });
+        return res.json({ ok: true, message: 'Đã lưu cấu hình tuần' });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════
@@ -74,59 +74,59 @@ router.post('/api/lichtruc/config-tuan/save/', loginRequired, roleRequired('admi
 
 /** GET /api/cauhinh-ngay/?ngay=YYYY-MM-DD */
 router.get('/api/cauhinh-ngay/', loginRequired, roleRequired('admin', 'quan_ly', 'hoc_vu', 'ke_toan', 'giao_vien'), async (req, res) => {
-  try {
-    const { ngay } = req.query;
-    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
-    const config = await CauHinhNgay.findByPk(ngay);
-    return res.json({ ok: true, config: config ? config.toJSON() : null });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { ngay } = req.query;
+        if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
+        const config = await CauHinhNgay.findByPk(ngay);
+        return res.json({ ok: true, config: config ? config.toJSON() : null });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/cauhinh-ngay/range/?tu=YYYY-MM-DD&den=YYYY-MM-DD */
 router.get('/api/cauhinh-ngay/range/', loginRequired, async (req, res) => {
-  try {
-    const { tu, den } = req.query;
-    if (!tu || !den) return res.status(400).json({ ok: false, error: 'Thiếu tham số tu/den' });
-    const list = await CauHinhNgay.findAll({
-      where: { ngay: { [Op.between]: [tu, den] } },
-      order: [['ngay', 'ASC']],
-    });
-    // Build map { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru, hs_them_vao, ghi_chu } }
-    const map = {};
-    list.forEach(c => { map[c.ngay] = parseCauHinhNgay(c); });
-    return res.json({ ok: true, map });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { tu, den } = req.query;
+        if (!tu || !den) return res.status(400).json({ ok: false, error: 'Thiếu tham số tu/den' });
+        const list = await CauHinhNgay.findAll({
+            where: { ngay: { [Op.between]: [tu, den] } },
+            order: [['ngay', 'ASC']],
+        });
+        // Build map { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru, hs_them_vao, ghi_chu } }
+        const map = {};
+        list.forEach(c => { map[c.ngay] = parseCauHinhNgay(c); });
+        return res.json({ ok: true, map });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/cauhinh-ngay/save/ */
 router.post('/api/cauhinh-ngay/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { ngay, lop_ap_dung, hs_loai_tru, hs_them_vao, ghi_chu, phong_tam_an, phong_tam_ngu, lop_phong_an, lop_phong_ngu } = req.body;
-    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
-    await CauHinhNgay.upsert({
-      ngay,
-      lop_ap_dung: lop_ap_dung && lop_ap_dung.length > 0 ? JSON.stringify(lop_ap_dung) : null,
-      hs_loai_tru: hs_loai_tru && hs_loai_tru.length > 0 ? JSON.stringify(hs_loai_tru) : null,
-      hs_them_vao: hs_them_vao && hs_them_vao.length > 0 ? JSON.stringify(hs_them_vao) : null,
-      phong_tam_an: phong_tam_an || null,
-      phong_tam_ngu: phong_tam_ngu || null,
-      // lop_phong_an/ngu: object { '10A1': 'A20', '10A2': 'A20', '10A3': 'A30' }
-      lop_phong_an: lop_phong_an && Object.keys(lop_phong_an).length > 0 ? JSON.stringify(lop_phong_an) : null,
-      lop_phong_ngu: lop_phong_ngu && Object.keys(lop_phong_ngu).length > 0 ? JSON.stringify(lop_phong_ngu) : null,
-      ghi_chu: ghi_chu || null,
-    });
-    return res.json({ ok: true, message: 'Đã lưu cấu hình ngày' });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { ngay, lop_ap_dung, hs_loai_tru, hs_them_vao, ghi_chu, phong_tam_an, phong_tam_ngu, lop_phong_an, lop_phong_ngu } = req.body;
+        if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
+        await CauHinhNgay.upsert({
+            ngay,
+            lop_ap_dung: lop_ap_dung && lop_ap_dung.length > 0 ? JSON.stringify(lop_ap_dung) : null,
+            hs_loai_tru: hs_loai_tru && hs_loai_tru.length > 0 ? JSON.stringify(hs_loai_tru) : null,
+            hs_them_vao: hs_them_vao && hs_them_vao.length > 0 ? JSON.stringify(hs_them_vao) : null,
+            phong_tam_an: phong_tam_an || null,
+            phong_tam_ngu: phong_tam_ngu || null,
+            // lop_phong_an/ngu: object { '10A1': 'A20', '10A2': 'A20', '10A3': 'A30' }
+            lop_phong_an: lop_phong_an && Object.keys(lop_phong_an).length > 0 ? JSON.stringify(lop_phong_an) : null,
+            lop_phong_ngu: lop_phong_ngu && Object.keys(lop_phong_ngu).length > 0 ? JSON.stringify(lop_phong_ngu) : null,
+            ghi_chu: ghi_chu || null,
+        });
+        return res.json({ ok: true, message: 'Đã lưu cấu hình ngày' });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/cauhinh-ngay/delete/ */
 router.post('/api/cauhinh-ngay/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { ngay } = req.body;
-    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
-    await CauHinhNgay.destroy({ where: { ngay } });
-    return res.json({ ok: true, message: 'Đã xóa cấu hình ngày đặc biệt' });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { ngay } = req.body;
+        if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu tham số ngày' });
+        await CauHinhNgay.destroy({ where: { ngay } });
+        return res.json({ ok: true, message: 'Đã xóa cấu hình ngày đặc biệt' });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════
@@ -135,64 +135,64 @@ router.post('/api/cauhinh-ngay/delete/', loginRequired, roleRequired('admin', 'q
 
 /** GET /api/phong/:loai - loai=an|ngu */
 router.get('/api/phong/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
-  try {
-    const loaiStr = req.params.loai; // 'an' | 'ngu'
-    const loai = loaiStr === 'an' ? 0 : 1;
-    const cacheKey = `phong_${loaiStr}`;
+    try {
+        const loaiStr = req.params.loai; // 'an' | 'ngu'
+        const loai = loaiStr === 'an' ? 0 : 1;
+        const cacheKey = `phong_${loaiStr}`;
 
-    const cached = appCache.get(cacheKey);
-    if (cached) {
-      res.set('X-Cache', 'HIT');
-      return res.json({ ok: true, phong: cached });
-    }
+        const cached = appCache.get(cacheKey);
+        if (cached) {
+            res.set('X-Cache', 'HIT');
+            return res.json({ ok: true, phong: cached });
+        }
 
-    const list = await Phong.findAll({ where: { loai_phong: loai }, order: [['ma_phong', 'ASC']] });
-    const plain = list.map(p => p.toJSON());
-    appCache.set(cacheKey, plain);
-    res.set('X-Cache', 'MISS');
-    return res.json({ ok: true, phong: plain });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        const list = await Phong.findAll({ where: { loai_phong: loai }, order: [['ma_phong', 'ASC']] });
+        const plain = list.map(p => p.toJSON());
+        appCache.set(cacheKey, plain);
+        res.set('X-Cache', 'MISS');
+        return res.json({ ok: true, phong: plain });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/hocsinh/:loai - loai=an|ngu */
 router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
-  try {
-    const loai = req.params.loai;
-    const cacheKey = 'hocsinh_full';
+    try {
+        const loai = req.params.loai;
+        const cacheKey = 'hocsinh_full';
 
-    let data = appCache.get(cacheKey);
-    if (!data) {
-      const list = await HocSinh.findAll({
-        where: { dang_hoc: true },
-        attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id'],
-        include: [
-          { association: 'phong_an', attributes: ['ma_phong'] },
-          { association: 'phong_ngu', attributes: ['ma_phong', 'gioi_tinh'] },
-        ],
-        order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
-      });
-      data = list.map(hs => ({
-        id: hs.id,
-        ho_ten: hs.ho_ten,
-        lop: hs.lop,
-        khoi: parseInt(hs.lop.slice(0, 2)),
-        gioi_tinh: hs.gioi_tinh,
-        phong_an: hs.phong_an?.ma_phong || null,
-        phong_ngu: hs.phong_ngu?.ma_phong || null,
-      }));
-      appCache.set(cacheKey, data);
-      res.set('X-Cache', 'MISS');
-    } else {
-      res.set('X-Cache', 'HIT');
-    }
+        let data = appCache.get(cacheKey);
+        if (!data) {
+            const list = await HocSinh.findAll({
+                where: { dang_hoc: true },
+                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id'],
+                include: [
+                    { association: 'phong_an', attributes: ['ma_phong'] },
+                    { association: 'phong_ngu', attributes: ['ma_phong', 'gioi_tinh'] },
+                ],
+                order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+            });
+            data = list.map(hs => ({
+                id: hs.id,
+                ho_ten: hs.ho_ten,
+                lop: hs.lop,
+                khoi: parseInt(hs.lop.slice(0, 2)),
+                gioi_tinh: hs.gioi_tinh,
+                phong_an: hs.phong_an?.ma_phong || null,
+                phong_ngu: hs.phong_ngu?.ma_phong || null,
+            }));
+            appCache.set(cacheKey, data);
+            res.set('X-Cache', 'MISS');
+        } else {
+            res.set('X-Cache', 'HIT');
+        }
 
-    // Lọc theo loại nếu cần
-    const filtered = loai === 'an'
-      ? data.filter(hs => hs.phong_an)
-      : data.filter(hs => hs.phong_ngu);
+        // Lọc theo loại nếu cần
+        const filtered = loai === 'an'
+            ? data.filter(hs => hs.phong_an)
+            : data.filter(hs => hs.phong_ngu);
 
-    return res.json({ ok: true, hocsinh: filtered });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({ ok: true, hocsinh: filtered });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // Export invalidate function để dùng ở nơi khác nếu cần
@@ -200,158 +200,158 @@ router.invalidateStaticCaches = invalidateStaticCaches;
 
 /** GET /api/diemdanh/range/?tu=YYYY-MM-DD&den=YYYY-MM-DD&loai=an|ngu */
 router.get('/api/diemdanh/range/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
-  try {
-    const { tu, den, loai } = req.query;
-    if (!tu || !den) return res.status(400).json({ ok: false, error: 'Thiếu tham số tu/den' });
-    const records = await DiemDanhHS.findAll({
-      where: { ngay: { [Op.between]: [tu, den] } },
-      attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu'],
-    });
-    // Build map: { [ma_hs_id]: { [YYYY-MM-DD]: { an: 0|1|2|null, ngu: 0|1|2|null } } }
-    const map = {};
-    records.forEach(r => {
-      const hsId = r.ma_hs_id;
-      const ngay = r.ngay; // YYYY-MM-DD string
-      if (!map[hsId]) map[hsId] = {};
-      map[hsId][ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
-    });
-    return res.json({ ok: true, map, tu, den });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { tu, den, loai } = req.query;
+        if (!tu || !den) return res.status(400).json({ ok: false, error: 'Thiếu tham số tu/den' });
+        const records = await DiemDanhHS.findAll({
+            where: { ngay: { [Op.between]: [tu, den] } },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu'],
+        });
+        // Build map: { [ma_hs_id]: { [YYYY-MM-DD]: { an: 0|1|2|null, ngu: 0|1|2|null } } }
+        const map = {};
+        records.forEach(r => {
+            const hsId = r.ma_hs_id;
+            const ngay = r.ngay; // YYYY-MM-DD string
+            if (!map[hsId]) map[hsId] = {};
+            map[hsId][ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
+        });
+        return res.json({ ok: true, map, tu, den });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/diemdanh/?ngay=&loai= */
 router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
-  try {
-    const { ngay, loai } = req.query;
-    const ngayFilter = ngay || new Date().toISOString().split('T')[0];
-    const records = await DiemDanhHS.findAll({
-      where: { ngay: ngayFilter },
-      include: [{ association: 'hoc_sinh', attributes: ['id', 'ho_ten', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'] }],
-    });
+    try {
+        const { ngay, loai } = req.query;
+        const ngayFilter = ngay || new Date().toISOString().split('T')[0];
+        const records = await DiemDanhHS.findAll({
+            where: { ngay: ngayFilter },
+            include: [{ association: 'hoc_sinh', attributes: ['id', 'ho_ten', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'] }],
+        });
 
-    // Kiểm tra xem ngày này có lịch bán trú không
-    let hasSchedule = false;
-    const dateObj = new Date(ngayFilter + 'T00:00:00');
-    const dow = dateObj.getDay(); // 0=CN, 1=T2, ..., 4=T5, 5=T6
+        // Kiểm tra xem ngày này có lịch bán trú không
+        let hasSchedule = false;
+        const dateObj = new Date(ngayFilter + 'T00:00:00');
+        const dow = dateObj.getDay(); // 0=CN, 1=T2, ..., 4=T5, 5=T6
 
-    if (dow === 0 || dow === 6) {
-      // Cuối tuần không bao giờ có bán trú
-      hasSchedule = false;
-    } else if (dow === 5) {
-      // Thứ 6: có lịch nếu cờ show_t6 = true HOẶC đã có GV được phân công thực tế
-      const mon = new Date(dateObj);
-      mon.setDate(dateObj.getDate() - 4); // Thứ 6 - 4 = Thứ 2 (đầu tuần)
-      const monStr = mon.toISOString().split('T')[0];
-      const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
-      const showT6 = cauHinhTuan?.show_t6 ?? false;
-      const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
-      const pcCountT6 = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
-      hasSchedule = showT6 || pcCountT6 > 0;
-    } else {
-      // T2-T5: học bán trú bình thường, kiểm tra theo PhanCong
-      const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
-      const pcCount = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
-      hasSchedule = pcCount > 0;
-    }
+        if (dow === 0 || dow === 6) {
+            // Cuối tuần không bao giờ có bán trú
+            hasSchedule = false;
+        } else if (dow === 5) {
+            // Thứ 6: có lịch nếu cờ show_t6 = true HOẶC đã có GV được phân công thực tế
+            const mon = new Date(dateObj);
+            mon.setDate(dateObj.getDate() - 4); // Thứ 6 - 4 = Thứ 2 (đầu tuần)
+            const monStr = mon.toISOString().split('T')[0];
+            const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
+            const showT6 = cauHinhTuan?.show_t6 ?? false;
+            const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
+            const pcCountT6 = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
+            hasSchedule = showT6 || pcCountT6 > 0;
+        } else {
+            // T2-T5: học bán trú bình thường, kiểm tra theo PhanCong
+            const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
+            const pcCount = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
+            hasSchedule = pcCount > 0;
+        }
 
-    // Trả về kèm cấu hình ngày (có hs_them_vao) cho frontend
-    const cauhinhNgay = await CauHinhNgay.findByPk(ngayFilter);
-    if (cauhinhNgay && cauhinhNgay.is_nghi) {
-      hasSchedule = false;
-    }
+        // Trả về kèm cấu hình ngày (có hs_them_vao) cho frontend
+        const cauhinhNgay = await CauHinhNgay.findByPk(ngayFilter);
+        if (cauhinhNgay && cauhinhNgay.is_nghi) {
+            hasSchedule = false;
+        }
 
-    return res.json({
-      ok: true, records, ngay: ngayFilter, has_schedule: hasSchedule,
-      cauhinh_ngay: parseCauHinhNgay(cauhinhNgay),
-    });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({
+            ok: true, records, ngay: ngayFilter, has_schedule: hasSchedule,
+            cauhinh_ngay: parseCauHinhNgay(cauhinhNgay),
+        });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ─── Helper: lấy thông tin cấu hình ngày đặc biệt dưới dạng plain object ───
 function parseCauHinhNgay(c) {
-  if (!c) return null;
-  return {
-    lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
-    hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
-    hs_them_vao: c.hs_them_vao ? JSON.parse(c.hs_them_vao) : null,
-    phong_tam_an: c.phong_tam_an || null,
-    phong_tam_ngu: c.phong_tam_ngu || null,
-    // lop_phong_an/ngu: object { '10A1': 'A20', '10A2': 'A30' } or null
-    lop_phong_an: c.lop_phong_an ? JSON.parse(c.lop_phong_an) : null,
-    lop_phong_ngu: c.lop_phong_ngu ? JSON.parse(c.lop_phong_ngu) : null,
-    ghi_chu: c.ghi_chu,
-    is_nghi: c.is_nghi || false,
-  };
+    if (!c) return null;
+    return {
+        lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
+        hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
+        hs_them_vao: c.hs_them_vao ? JSON.parse(c.hs_them_vao) : null,
+        phong_tam_an: c.phong_tam_an || null,
+        phong_tam_ngu: c.phong_tam_ngu || null,
+        // lop_phong_an/ngu: object { '10A1': 'A20', '10A2': 'A30' } or null
+        lop_phong_an: c.lop_phong_an ? JSON.parse(c.lop_phong_an) : null,
+        lop_phong_ngu: c.lop_phong_ngu ? JSON.parse(c.lop_phong_ngu) : null,
+        ghi_chu: c.ghi_chu,
+        is_nghi: c.is_nghi || false,
+    };
 }
 
 // ─── Helper: kiểm tra 1 HS có được phép tham gia bán trú ngày đó không ───
 function isHsAllowed(hs, cauhinhNgay) {
-  if (!cauhinhNgay) return true; // Không có cấu hình đặc biệt → toàn trường
-  if (cauhinhNgay.is_nghi) return false; // Toàn trường nghỉ
-  const lopList = cauhinhNgay.lop_ap_dung ? JSON.parse(cauhinhNgay.lop_ap_dung) : null;
-  const hsLoaiTru = cauhinhNgay.hs_loai_tru ? JSON.parse(cauhinhNgay.hs_loai_tru) : null;
-  const hsThemVao = cauhinhNgay.hs_them_vao ? JSON.parse(cauhinhNgay.hs_them_vao) : null;
-  // Nếu được thêm tay (vì dụ: HS ngoài khối) → luôn được phép
-  if (hsThemVao && hsThemVao.some(x => x.id === hs.id)) return true;
-  if (lopList && lopList.length > 0) {
-    if (!lopList.includes(hs.lop)) return false;
-  }
-  if (hsLoaiTru && hsLoaiTru.length > 0) {
-    if (hsLoaiTru.includes(hs.id)) return false;
-  }
-  return true;
+    if (!cauhinhNgay) return true; // Không có cấu hình đặc biệt → toàn trường
+    if (cauhinhNgay.is_nghi) return false; // Toàn trường nghỉ
+    const lopList = cauhinhNgay.lop_ap_dung ? JSON.parse(cauhinhNgay.lop_ap_dung) : null;
+    const hsLoaiTru = cauhinhNgay.hs_loai_tru ? JSON.parse(cauhinhNgay.hs_loai_tru) : null;
+    const hsThemVao = cauhinhNgay.hs_them_vao ? JSON.parse(cauhinhNgay.hs_them_vao) : null;
+    // Nếu được thêm tay (vì dụ: HS ngoài khối) → luôn được phép
+    if (hsThemVao && hsThemVao.some(x => x.id === hs.id)) return true;
+    if (lopList && lopList.length > 0) {
+        if (!lopList.includes(hs.lop)) return false;
+    }
+    if (hsLoaiTru && hsLoaiTru.length > 0) {
+        if (hsLoaiTru.includes(hs.id)) return false;
+    }
+    return true;
 }
 
 /** POST /api/diemdanh/save/ */
 router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
-  try {
-    const { loai, records } = req.body;
-    if (!records || !Array.isArray(records) || records.length === 0) {
-      return res.status(400).json({ ok: false, error: 'Thiếu dữ liệu records' });
-    }
-
-    const reqNgay = records[0].ngay;
-
-    // Kiểm tra quyền và khung giờ điểm danh:
-    // Admin/Superuser có thể điểm danh bất kỳ lúc nào.
-    // Học vụ (hoc_vu) chỉ được điểm danh trong khung giờ từ 11:00 đến 14:00.
-    const isSpecialAdmin = Boolean(req.user?.is_admin || req.user?.is_superuser);
-    if (!isSpecialAdmin) {
-      const now = new Date();
-      const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
-      const [vnHour, vnMinute] = timeStr.split(':').map(Number);
-      const totalMins = vnHour * 60 + vnMinute;
-      // 11h00 = 660 mins, 14h00 = 840 mins
-      if (totalMins < 660 || totalMins > 840) {
-        return res.status(400).json({ 
-          ok: false, 
-          error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 11:00 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.' 
-        });
-      }
-    }
-
-    const field = loai === 'an' ? 'diem_danh_an' : 'diem_danh_ngu';
-    const t = await sequelize.transaction();
     try {
-      const oppositeField = loai === 'an' ? 'diem_danh_ngu' : 'diem_danh_an';
-      const data = records.map(r => ({
-        ma_hs_id: r.ma_hs,
-        ngay: r.ngay,
-        [field]: r.status,
-        // Khi tạo mới row, field kia chưa có thì set explicitly là null (tránh db default 0)
-        // Lưu ý updateOnDuplicate chỉ update [field, 'ghi_chu'] nên dữ liệu field kia ko bị ghi đè thành null nếu row đã tồn tại
-        [oppositeField]: null,
-        ghi_chu: r.ghi_chu || null
-      }));
+        const { loai, records } = req.body;
+        if (!records || !Array.isArray(records) || records.length === 0) {
+            return res.status(400).json({ ok: false, error: 'Thiếu dữ liệu records' });
+        }
 
-      await DiemDanhHS.bulkCreate(data, {
-        updateOnDuplicate: [field, 'ghi_chu'],
-        transaction: t
-      });
-      await t.commit();
-      return res.json({ ok: true, message: `Đã lưu ${records.length} bản ghi điểm danh` });
-    } catch (e) { await t.rollback(); throw e; }
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        const reqNgay = records[0].ngay;
+
+        // Kiểm tra quyền và khung giờ điểm danh:
+        // Admin/Superuser có thể điểm danh bất kỳ lúc nào.
+        // Học vụ (hoc_vu) chỉ được điểm danh trong khung giờ từ 11:00 đến 14:00.
+        const isSpecialAdmin = Boolean(req.user?.is_admin || req.user?.is_superuser);
+        if (!isSpecialAdmin) {
+            const now = new Date();
+            const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+            const [vnHour, vnMinute] = timeStr.split(':').map(Number);
+            const totalMins = vnHour * 60 + vnMinute;
+            // 11h00 = 660 mins, 14h00 = 840 mins
+            if (totalMins < 660 || totalMins > 840) {
+                return res.status(400).json({
+                    ok: false,
+                    error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 11:00 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.'
+                });
+            }
+        }
+
+        const field = loai === 'an' ? 'diem_danh_an' : 'diem_danh_ngu';
+        const t = await sequelize.transaction();
+        try {
+            const oppositeField = loai === 'an' ? 'diem_danh_ngu' : 'diem_danh_an';
+            const data = records.map(r => ({
+                ma_hs_id: r.ma_hs,
+                ngay: r.ngay,
+                [field]: r.status,
+                // Khi tạo mới row, field kia chưa có thì set explicitly là null (tránh db default 0)
+                // Lưu ý updateOnDuplicate chỉ update [field, 'ghi_chu'] nên dữ liệu field kia ko bị ghi đè thành null nếu row đã tồn tại
+                [oppositeField]: null,
+                ghi_chu: r.ghi_chu || null
+            }));
+
+            await DiemDanhHS.bulkCreate(data, {
+                updateOnDuplicate: [field, 'ghi_chu'],
+                transaction: t
+            });
+            await t.commit();
+            return res.json({ ok: true, message: `Đã lưu ${records.length} bản ghi điểm danh` });
+        } catch (e) { await t.rollback(); throw e; }
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════
@@ -360,193 +360,191 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
 
 /** GET /api/lichtruc/week/?tuan= */
 router.get('/api/lichtruc/week/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const tuan = getMondayOfWeek(req.query.tuan);
-    const cuoi = addDays(tuan, 6);
-    const records = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [tuan, cuoi] } },
-      include: [
-        { association: 'giao_vien', attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu'] },
-        { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] },
-        { association: 'phong', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] },
-      ],
-      order: [['ngay', 'ASC'], ['loai_truc', 'ASC']],
-    });
-    return res.json({ ok: true, records, tuan });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const tuan = getMondayOfWeek(req.query.tuan);
+        const cuoi = addDays(tuan, 6);
+        const records = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [tuan, cuoi] } },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] },
+                { association: 'phong', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] },
+            ],
+            order: [['ngay', 'ASC'], ['loai_truc', 'ASC']],
+        });
+        return res.json({ ok: true, records, tuan });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/lichtruc/week-public/?tuan= */
 router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
-  try {
-    const tuan = getMondayOfWeek(req.query.tuan);
-    const cuoi = addDays(tuan, 6);
+    try {
+        const tuan = getMondayOfWeek(req.query.tuan);
+        const cuoi = addDays(tuan, 6);
 
-    let gv_list = appCache.get('gv_active_list');
-    let phong_list = appCache.get('phong_all_list');
-    let cauhinh = appCache.get('cauhinh_hethong');
+        let gv_list = appCache.get('gv_active_list');
+        let phong_list = appCache.get('phong_all_list');
+        let cauhinh = appCache.get('cauhinh_hethong');
 
-    const tasks = [
-      PhanCongTrucGV.findAll({ where: { ngay: { [Op.between]: [tuan, cuoi] } }, order: [['ngay', 'ASC']] })
-    ];
+        const tasks = [
+            PhanCongTrucGV.findAll({ where: { ngay: { [Op.between]: [tuan, cuoi] } }, order: [['ngay', 'ASC']] })
+        ];
 
-    if (!gv_list) {
-      tasks.push(GiaoVien.findAll({ where: { dang_lam: true }, attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu', 'lich_ranh'] }).then(res => {
-        const plain = res.map(r => r.toJSON());
-        appCache.set('gv_active_list', plain);
-        return plain;
-      }));
-    }
-    if (!phong_list) {
-      tasks.push(Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] }).then(res => {
-        const plain = res.map(r => r.toJSON());
-        appCache.set('phong_all_list', plain);
-        return plain;
-      }));
-    }
-    if (!cauhinh) {
-      tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
-        const plain = ch.toJSON();
-        appCache.set('cauhinh_hethong', plain);
-        return plain;
-      }));
-    }
+        if (!gv_list) {
+            tasks.push(GiaoVien.findAll({ where: { dang_lam: true }, attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu', 'lich_ranh'] }).then(res => {
+                const plain = res.map(r => r.toJSON());
+                appCache.set('gv_active_list', plain);
+                return plain;
+            }));
+        }
+        if (!phong_list) {
+            tasks.push(Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] }).then(res => {
+                const plain = res.map(r => r.toJSON());
+                appCache.set('phong_all_list', plain);
+                return plain;
+            }));
+        }
+        if (!cauhinh) {
+            tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
+                const plain = ch.toJSON();
+                appCache.set('cauhinh_hethong', plain);
+                return plain;
+            }));
+        }
 
-    const results = await Promise.all(tasks);
-    const records = results[0];
+        const results = await Promise.all(tasks);
+        const records = results[0];
 
-    return res.json({
-      ok: true,
-      records,
-      tuan,
-      gv_list: gv_list || appCache.get('gv_active_list') || [],
-      phong_list: phong_list || appCache.get('phong_all_list') || [],
-      nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2026-2027',
-      nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
-      ten_truong: cauhinh?.ten_truong || appCache.get('cauhinh_hethong')?.ten_truong || 'LÊ THỊ HỒNG GẤM'
-    });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({
+            ok: true,
+            records,
+            tuan,
+            gv_list: gv_list || appCache.get('gv_active_list') || [],
+            phong_list: phong_list || appCache.get('phong_all_list') || [],
+            nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2026-2027',
+            nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
+            ten_truong: cauhinh?.ten_truong || appCache.get('cauhinh_hethong')?.ten_truong || 'LÊ THỊ HỒNG GẤM'
+        });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/lichtruc/month/?thang=YYYY-MM */
 router.get('/api/lichtruc/month/', loginRequired, async (req, res) => {
-  try {
-    const [year, month] = (req.query.thang || new Date().toISOString().slice(0, 7)).split('-');
-    const start = `${year}-${month}-01`;
-    const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
-    const records = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-      include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
-      order: [['ngay', 'ASC']],
-    });
-    return res.json({ ok: true, records, thang: `${year}-${month}` });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const [year, month] = (req.query.thang || new Date().toISOString().slice(0, 7)).split('-');
+        const start = `${year}-${month}-01`;
+        const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+        const records = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+            include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
+            order: [['ngay', 'ASC']],
+        });
+        return res.json({ ok: true, records, thang: `${year}-${month}` });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/save/ */
 router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { id, ma_gv_id, ma_phong_id, ngay, loai_truc, xac_nhan_truc, ma_gv_truc_thay_id } = req.body;
-    const phong = await Phong.findByPk(ma_phong_id);
-    if (!phong || phong.loai_phong !== parseInt(loai_truc)) {
-      return res.status(400).json({ ok: false, error: 'Loại phòng không khớp loại trực' });
-    }
+    try {
+        const { id, ma_gv_id, ma_phong_id, ngay, loai_truc, xac_nhan_truc, ma_gv_truc_thay_id, nhiem_vu } = req.body;
+        const phong = await Phong.findByPk(ma_phong_id);
+        if (!phong || phong.loai_phong !== parseInt(loai_truc)) {
+            return res.status(400).json({ ok: false, error: 'Loại phòng không khớp loại trực' });
+        }
 
-    const gv = await GiaoVien.findByPk(ma_gv_id);
-    if (!gv) return res.status(400).json({ ok: false, error: 'Giáo viên không tồn tại' });
+        const gv = await GiaoVien.findByPk(ma_gv_id);
+        if (!gv) return res.status(400).json({ ok: false, error: 'Giáo viên không tồn tại' });
 
-    // 1. KIỂM TRA GIỚI TÍNH (Cho phòng ngủ)
-    const targetGvId = ma_gv_truc_thay_id || ma_gv_id;
-    const targetGv = targetGvId === ma_gv_id ? gv : await GiaoVien.findByPk(targetGvId);
-    
-    if (phong.loai_phong === 1 && phong.gioi_tinh !== null) {
-      if (targetGv.gioi_tinh !== phong.gioi_tinh) {
-        return res.status(400).json({ ok: false, error: `Phòng ngủ ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} chỉ cho phép giáo viên ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} trực.` });
-      }
-    }
+        // 1. KIỂM TRA GIỚI TÍNH (Cho phòng ngủ)
+        const targetGvId = ma_gv_truc_thay_id || ma_gv_id;
+        const targetGv = targetGvId === ma_gv_id ? gv : await GiaoVien.findByPk(targetGvId);
 
-    // 2. KIỂM TRA TRÙNG: 1 GV có thể trực nhiều phòng trong cùng ca/ngày.
-    // Chỉ chặn nếu GV đã được thêm vào CHÍNH PHÒNG NÀY trong ca trực này.
-    const alreadyInThisRoom = await PhanCongTrucGV.findOne({
-      where: {
-        ngay,
-        loai_truc: parseInt(loai_truc),
-        ma_phong_id,
-        [Op.or]: [
-          { ma_gv_id: targetGvId, ma_gv_truc_thay_id: null },
-          { ma_gv_truc_thay_id: targetGvId }
-        ],
-        id: { [Op.ne]: id || 0 }
-      }
-    });
-    if (alreadyInThisRoom) {
-      return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có trong danh sách phân công tại phòng ${ma_phong_id} trong ca trực này rồi.` });
-    }
+        if (phong.loai_phong === 1 && phong.gioi_tinh !== null) {
+            if (targetGv.gioi_tinh !== phong.gioi_tinh) {
+                return res.status(400).json({ ok: false, error: `Phòng ngủ ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} chỉ cho phép giáo viên ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} trực.` });
+            }
+        }
 
-    // RÀNG BUỘC TRỰC THAY
-    if (ma_gv_truc_thay_id) {
-      if (parseInt(ma_gv_truc_thay_id) === parseInt(ma_gv_id)) {
-        return res.status(400).json({ ok: false, error: 'Giáo viên không thể trực thay cho chính mình' });
-      }
-    } else {
-      // CHỈ KIỂM TRA GIỚI HẠN KHI THÊM MỚI (KHÔNG PHẢI TRỰC THAY)
-      const slToiDa = gv.nhiem_vu === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
-      const hienTai = await PhanCongTrucGV.count({
-        where: { ma_phong_id, ngay, loai_truc: parseInt(loai_truc), id: { [Op.ne]: id || 0 } },
-        include: [{
-          model: GiaoVien,
-          as: 'giao_vien',
-          where: { nhiem_vu: gv.nhiem_vu }
-        }]
-      });
-
-      if (hienTai >= slToiDa) {
-        return res.status(400).json({
-          ok: false,
-          error: `Phòng ${ma_phong_id} đã đủ số lượng giáo viên ${gv.nhiem_vu === 0 ? 'điểm danh' : 'hỗ trợ'} (Tối đa: ${slToiDa})`
+        // 2. KIỂM TRA TRÙNG: 1 GV có thể trực nhiều phòng trong cùng ca/ngày.
+        // Chỉ chặn nếu GV đã được thêm vào CHÍNH PHÒNG NÀY trong ca trực này.
+        const alreadyInThisRoom = await PhanCongTrucGV.findOne({
+            where: {
+                ngay,
+                loai_truc: parseInt(loai_truc),
+                ma_phong_id,
+                [Op.or]: [
+                    { ma_gv_id: targetGvId, ma_gv_truc_thay_id: null },
+                    { ma_gv_truc_thay_id: targetGvId }
+                ],
+                id: { [Op.ne]: id || 0 }
+            }
         });
-      }
-    }
-    const data = {
-      ma_gv_id, ma_phong_id, ngay,
-      loai_truc: parseInt(loai_truc),
-      xac_nhan_truc: xac_nhan_truc !== false,
-      ma_gv_truc_thay_id: ma_gv_truc_thay_id || null,
-      ngay_cap_nhat: new Date(),
-      nguoi_cap_nhat_id: req.session?.user?.id || null,
-    };
-    const fetchFull = async (recordId) => PhanCongTrucGV.findByPk(recordId, {
-      include: [
-        { association: 'giao_vien', attributes: ['id', 'ho_ten', 'nhiem_vu', 'gioi_tinh'] },
-        { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'nhiem_vu'] },
-      ]
-    });
-    if (id) {
-      await PhanCongTrucGV.update(data, { where: { id } });
-      const updated = await fetchFull(id);
-      return res.json({ ok: true, message: 'Cập nhật phân công thành công', record: updated });
-    }
-    const pc = await PhanCongTrucGV.create(data);
-    const full = await fetchFull(pc.id);
-    return res.json({ ok: true, message: 'Tạo phân công thành công', record: full });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        if (alreadyInThisRoom) {
+            return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có trong danh sách phân công tại phòng ${ma_phong_id} trong ca trực này rồi.` });
+        }
+
+        const assignedNV = nhiem_vu !== undefined && nhiem_vu !== null ? parseInt(nhiem_vu) : (gv.nhiem_vu || 0);
+
+        // RÀNG BUỘC TRỰC THAY
+        if (ma_gv_truc_thay_id) {
+            if (parseInt(ma_gv_truc_thay_id) === parseInt(ma_gv_id)) {
+                return res.status(400).json({ ok: false, error: 'Giáo viên không thể trực thay cho chính mình' });
+            }
+        } else {
+            // CHỈ KIỂM TRA GIỚI HẠN KHI THÊM MỚI (KHÔNG PHẢI TRỰC THAY)
+            const slToiDa = assignedNV === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
+            const hienTai = await PhanCongTrucGV.count({
+                where: { ma_phong_id, ngay, loai_truc: parseInt(loai_truc), nhiem_vu: assignedNV, id: { [Op.ne]: id || 0 } }
+            });
+
+            if (hienTai >= slToiDa) {
+                return res.status(400).json({
+                    ok: false,
+                    error: `Phòng ${ma_phong_id} đã đủ số lượng giáo viên ${assignedNV === 0 ? 'điểm danh' : 'giám sát'} (Tối đa: ${slToiDa})`
+                });
+            }
+        }
+        const data = {
+            ma_gv_id, ma_phong_id, ngay,
+            loai_truc: parseInt(loai_truc),
+            nhiem_vu: assignedNV,
+            xac_nhan_truc: xac_nhan_truc !== false,
+            ma_gv_truc_thay_id: ma_gv_truc_thay_id || null,
+            ngay_cap_nhat: new Date(),
+            nguoi_cap_nhat_id: req.session?.user?.id || null,
+        };
+        const fetchFull = async (recordId) => PhanCongTrucGV.findByPk(recordId, {
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'nhiem_vu', 'gioi_tinh'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'nhiem_vu'] },
+            ]
+        });
+        if (id) {
+            await PhanCongTrucGV.update(data, { where: { id } });
+            const updated = await fetchFull(id);
+            return res.json({ ok: true, message: 'Cập nhật phân công thành công', record: updated });
+        }
+        const pc = await PhanCongTrucGV.create(data);
+        const full = await fetchFull(pc.id);
+        return res.json({ ok: true, message: 'Tạo phân công thành công', record: full });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/delete/ */
 router.post('/api/lichtruc/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { id } = req.body;
-    await PhanCongTrucGV.destroy({ where: { id } });
-    return res.json({ ok: true, message: 'Đã xóa phân công' });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { id } = req.body;
+        await PhanCongTrucGV.destroy({ where: { id } });
+        return res.json({ ok: true, message: 'Đã xóa phân công' });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /admin/lichtruc/:pk/xoa/ */
 router.post('/admin/lichtruc/:pk/xoa/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    await PhanCongTrucGV.destroy({ where: { id: req.params.pk } });
-    return res.json({ ok: true, message: 'Đã xóa' });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        await PhanCongTrucGV.destroy({ where: { id: req.params.pk } });
+        return res.json({ ok: true, message: 'Đã xóa' });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════
@@ -555,290 +553,354 @@ router.post('/admin/lichtruc/:pk/xoa/', loginRequired, roleRequired('admin', 'qu
 
 /** GET /api/lichtruc_khung/ */
 router.get('/api/lichtruc_khung/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const list = await LichTrucCoDinh.findAll({
-      include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten', 'gioi_tinh'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh', 'sl_diem_danh', 'sl_ho_tro'] }],
-      order: [['thu', 'ASC']],
-    });
-    return res.json({ ok: true, lich_khung: list });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const list = await LichTrucCoDinh.findAll({
+            include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten', 'gioi_tinh'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh', 'sl_diem_danh', 'sl_ho_tro'] }],
+            order: [['thu', 'ASC']],
+        });
+        return res.json({ ok: true, lich_khung: list });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc_khung/save/ */
 router.post('/api/lichtruc_khung/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { ma_phong_id, ma_gv_id, thu, nhiem_vu = 0 } = req.body;
-    
-    // 1. Kiểm tra tồn tại
-    const phong = await Phong.findByPk(ma_phong_id);
-    const gv = await GiaoVien.findByPk(ma_gv_id);
-    if (!phong || !gv) return res.status(400).json({ ok: false, error: 'Phòng hoặc Giáo viên không tồn tại' });
+    try {
+        const { ma_phong_id, ma_gv_id, thu, nhiem_vu = 0 } = req.body;
 
-    // 2. Kiểm tra giới hạn số lượng GV theo nhiem_vu từ request
-    const slToiDa = nhiem_vu === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
-    const hienTai = await LichTrucCoDinh.count({
-      where: { ma_phong_id, thu, nhiem_vu },
-    });
+        // 1. Kiểm tra tồn tại
+        const phong = await Phong.findByPk(ma_phong_id);
+        const gv = await GiaoVien.findByPk(ma_gv_id);
+        if (!phong || !gv) return res.status(400).json({ ok: false, error: 'Phòng hoặc Giáo viên không tồn tại' });
 
-    if (hienTai >= slToiDa) {
-      return res.status(400).json({ 
-        ok: false, 
-        error: `Phòng ${ma_phong_id} đã đủ số lượng GV ${nhiem_vu === 0 ? 'điểm danh' : 'hỗ trợ'} cho ngày này (Tối đa: ${slToiDa})` 
-      });
-    }
+        // 2. Kiểm tra giới hạn số lượng GV theo nhiem_vu từ request
+        const slToiDa = nhiem_vu === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
+        const hienTai = await LichTrucCoDinh.count({
+            where: { ma_phong_id, thu, nhiem_vu },
+        });
 
-    const [item, created] = await LichTrucCoDinh.findOrCreate({
-      where: { ma_gv_id, thu, ma_phong_id },
-      defaults: { ma_phong_id, ma_gv_id, thu: parseInt(thu), nhiem_vu: parseInt(nhiem_vu) },
-    });
-    // Nếu đã tồn tại nhưng đổi nhiem_vu
-    if (!created && item.nhiem_vu !== parseInt(nhiem_vu)) {
-      await item.update({ nhiem_vu: parseInt(nhiem_vu) });
-    }
-    return res.json({ ok: true, message: created ? 'Thêm lịch khung thành công' : 'Lịch khung đã tồn tại', id: item.id });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        if (hienTai >= slToiDa) {
+            return res.status(400).json({
+                ok: false,
+                error: `Phòng ${ma_phong_id} đã đủ số lượng GV ${nhiem_vu === 0 ? 'điểm danh' : 'hỗ trợ'} cho ngày này (Tối đa: ${slToiDa})`
+            });
+        }
+
+        const [item, created] = await LichTrucCoDinh.findOrCreate({
+            where: { ma_gv_id, thu, ma_phong_id },
+            defaults: { ma_phong_id, ma_gv_id, thu: parseInt(thu), nhiem_vu: parseInt(nhiem_vu) },
+        });
+        // Nếu đã tồn tại nhưng đổi nhiem_vu
+        if (!created && item.nhiem_vu !== parseInt(nhiem_vu)) {
+            await item.update({ nhiem_vu: parseInt(nhiem_vu) });
+        }
+        return res.json({ ok: true, message: created ? 'Thêm lịch khung thành công' : 'Lịch khung đã tồn tại', id: item.id });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc_khung/delete/ */
 router.post('/api/lichtruc_khung/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { id } = req.body;
-    if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id' });
-    await LichTrucCoDinh.destroy({ where: { id } });
-    return res.json({ ok: true, message: 'Đã xóa lịch khung' });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id' });
+        await LichTrucCoDinh.destroy({ where: { id } });
+        return res.json({ ok: true, message: 'Đã xóa lịch khung' });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** POST /api/lichtruc_khung/copy-day/ - Sao chép phân công từ một thứ sang các thứ khác */
+router.post('/api/lichtruc_khung/copy-day/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+    try {
+        const { fromThu = 0, toThus = [1, 2, 3] } = req.body;
+        if (typeof fromThu !== 'number' || !Array.isArray(toThus) || toThus.length === 0) {
+            return res.status(400).json({ ok: false, error: 'Tham số không hợp lệ' });
+        }
+
+        const sourceRecords = await LichTrucCoDinh.findAll({
+            where: { thu: fromThu },
+        });
+
+        if (sourceRecords.length === 0) {
+            const thuNames = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6'];
+            return res.status(400).json({ ok: false, error: `Không có dữ liệu phân công nào ở ${thuNames[fromThu] || 'Thứ ' + (fromThu + 2)} để sao chép` });
+        }
+
+        const t = await sequelize.transaction();
+        try {
+            // Xóa các bản ghi ở các thứ đích
+            await LichTrucCoDinh.destroy({
+                where: { thu: { [Op.in]: toThus } },
+                transaction: t,
+            });
+
+            // Tạo các bản ghi mới
+            const newRecords = [];
+            for (const targetThu of toThus) {
+                for (const src of sourceRecords) {
+                    newRecords.push({
+                        ma_phong_id: src.ma_phong_id,
+                        ma_gv_id: src.ma_gv_id,
+                        thu: targetThu,
+                        nhiem_vu: src.nhiem_vu,
+                    });
+                }
+            }
+
+            await LichTrucCoDinh.bulkCreate(newRecords, { transaction: t });
+            await t.commit();
+
+            const thuNames = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6'];
+            return res.json({
+                ok: true,
+                message: `Đã sao chép thành công ${sourceRecords.length} phân công từ ${thuNames[fromThu] || 'T' + (fromThu + 2)} sang ${toThus.map(th => thuNames[th] || 'T' + (th + 2)).join(', ')} (${newRecords.length} lượt phân công).`,
+                copiedCount: newRecords.length,
+            });
+        } catch (e) {
+            await t.rollback();
+            throw e;
+        }
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 /** POST /api/lichtruc_khung/auto/ - Tự động xếp lịch khung (Weighted Round-Robin) */
 router.post('/api/lichtruc_khung/auto/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const t = await sequelize.transaction();
     try {
-      // Xóa toàn bộ lịch khung cũ
-      await LichTrucCoDinh.destroy({ where: {}, truncate: true, transaction: t });
+        const t = await sequelize.transaction();
+        try {
+            // Xóa toàn bộ lịch khung cũ
+            await LichTrucCoDinh.destroy({ where: {}, truncate: true, transaction: t });
 
-      // Lấy danh sách phòng và GV
-      const phongs = await Phong.findAll({ transaction: t });
-      const gvAll  = await GiaoVien.findAll({ where: { dang_lam: true }, transaction: t });
+            // Lấy danh sách phòng và GV
+            const phongs = await Phong.findAll({ transaction: t });
+            const gvAll = await GiaoVien.findAll({ where: { dang_lam: true }, transaction: t });
 
-      if (gvAll.length === 0) {
-        await t.rollback();
-        return res.status(400).json({ ok: false, error: 'Không có giáo viên nào đang làm việc' });
-      }
+            if (gvAll.length === 0) {
+                await t.rollback();
+                return res.status(400).json({ ok: false, error: 'Không có giáo viên nào đang làm việc' });
+            }
 
-      // ── Chạy thuật toán Weighted Round-Robin ──────────────────────────
-      // Phương án A: dùng gv.nhiem_vu mặc định khi xếp tự động
-      const lichKhung = phanCongLichKhung({ phongs, gvAll });
+            // ── Chạy thuật toán Weighted Round-Robin ──────────────────────────
+            // Phương án A: dùng gv.nhiem_vu mặc định khi xếp tự động
+            const lichKhung = phanCongLichKhung({ phongs, gvAll });
 
-      if (lichKhung.length === 0) {
-        await t.rollback();
-        return res.status(400).json({ ok: false, error: 'Không thể tạo lịch: GV không có ngày rảnh hoặc chưa có phòng' });
-      }
+            if (lichKhung.length === 0) {
+                await t.rollback();
+                return res.status(400).json({ ok: false, error: 'Không thể tạo lịch: GV không có ngày rảnh hoặc chưa có phòng' });
+            }
 
-      // Gắn nhiem_vu mặc định từ GV vào mỗi bản ghi lịch khung
-      const gvMap = {};
-      gvAll.forEach(gv => { gvMap[gv.id] = gv; });
-      const lichKhungWithNV = lichKhung.map(k => ({
-        ...k,
-        nhiem_vu: gvMap[k.ma_gv_id]?.nhiem_vu ?? 0,
-      }));
+            // Gắn nhiem_vu mặc định từ GV vào mỗi bản ghi lịch khung
+            const gvMap = {};
+            gvAll.forEach(gv => { gvMap[gv.id] = gv; });
+            const lichKhungWithNV = lichKhung.map(k => ({
+                ...k,
+                nhiem_vu: gvMap[k.ma_gv_id]?.nhiem_vu ?? 0,
+            }));
 
-      // Validate
-      const warnings = [];
-      for (let thu = 0; thu < 5; thu++) {
-        const ngayLich = lichKhungWithNV.filter(k => k.thu === thu).map(k => ({
-          ma_gv_id: k.ma_gv_id,
-          ma_phong_id: k.ma_phong_id,
-          loai_truc: phongs.find(p => p.ma_phong === k.ma_phong_id)?.loai_phong,
-        }));
-        const { warnings: w } = validateAssignments(ngayLich, phongs, gvAll);
-        warnings.push(...w.map(msg => `[T${thu + 2}] ${msg}`));
-      }
+            // Validate
+            const warnings = [];
+            for (let thu = 0; thu < 5; thu++) {
+                const ngayLich = lichKhungWithNV.filter(k => k.thu === thu).map(k => ({
+                    ma_gv_id: k.ma_gv_id,
+                    ma_phong_id: k.ma_phong_id,
+                    loai_truc: phongs.find(p => p.ma_phong === k.ma_phong_id)?.loai_phong,
+                }));
+                const { warnings: w } = validateAssignments(ngayLich, phongs, gvAll);
+                warnings.push(...w.map(msg => `[T${thu + 2}] ${msg}`));
+            }
 
-      await LichTrucCoDinh.bulkCreate(lichKhungWithNV, { transaction: t, ignoreDuplicates: true });
-      await t.commit();
+            await LichTrucCoDinh.bulkCreate(lichKhungWithNV, { transaction: t, ignoreDuplicates: true });
+            await t.commit();
 
-      // Tính thống kê cân bằng tải
-      const loadStats = {};
-      lichKhung.forEach(k => { loadStats[k.ma_gv_id] = (loadStats[k.ma_gv_id] || 0) + 1; });
-      const loads = Object.values(loadStats);
-      const minLoad = loads.length ? Math.min(...loads) : 0;
-      const maxLoad = loads.length ? Math.max(...loads) : 0;
+            // Tính thống kê cân bằng tải
+            const loadStats = {};
+            lichKhung.forEach(k => { loadStats[k.ma_gv_id] = (loadStats[k.ma_gv_id] || 0) + 1; });
+            const loads = Object.values(loadStats);
+            const minLoad = loads.length ? Math.min(...loads) : 0;
+            const maxLoad = loads.length ? Math.max(...loads) : 0;
 
-      return res.json({
-        ok: true,
-        message: `Đã tạo ${lichKhung.length} lịch khung. Cân bằng tải: ${minLoad}–${maxLoad} buổi/GV/tuần`,
-        total: lichKhung.length,
-        can_bang: { min: minLoad, max: maxLoad, gv_duoc_xep: Object.keys(loadStats).length },
-        warnings: warnings.length > 0 ? warnings : undefined,
-      });
-    } catch (e) { await t.rollback(); throw e; }
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+            return res.json({
+                ok: true,
+                message: `Đã tạo ${lichKhung.length} lịch khung. Cân bằng tải: ${minLoad}–${maxLoad} buổi/GV/tuần`,
+                total: lichKhung.length,
+                can_bang: { min: minLoad, max: maxLoad, gv_duoc_xep: Object.keys(loadStats).length },
+                warnings: warnings.length > 0 ? warnings : undefined,
+            });
+        } catch (e) { await t.rollback(); throw e; }
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/apply-khung/ - Nạp lịch khung vào lịch thực tế */
 router.post('/api/lichtruc/apply-khung/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { tuan, force = false } = req.body;
-    const monday = getMondayOfWeek(tuan);
-    const nguoi_cap_nhat_id = req.session?.user?.id || null;
-    const now = new Date();
-    const t = await sequelize.transaction();
-    let inserted = 0, skipped = 0;
     try {
-      // Nếu ghi đè, xóa sạch lịch cũ của tuần đó từ Thứ 2 đến Thứ 5 (Thứ 6 không bị ảnh hưởng)
-      if (force) {
-        const thursday = addDays(monday, 3);
-        await PhanCongTrucGV.destroy({
-          where: { ngay: { [Op.between]: [monday, thursday] } },
-          transaction: t,
-        });
-        // Xóa cờ is_nghi nếu có trong khoảng T2-T5
-        await CauHinhNgay.destroy({ where: { ngay: { [Op.between]: [monday, thursday] }, is_nghi: true }, transaction: t });
-      }
+        const { tuan, force = true } = req.body;
+        const monday = getMondayOfWeek(tuan);
+        const nguoi_cap_nhat_id = req.session?.user?.id || null;
+        const now = new Date();
+        const t = await sequelize.transaction();
+        let inserted = 0, skipped = 0;
+        try {
+            // Nếu ghi đè (mặc định), xóa sạch lịch cũ của tuần đó từ Thứ 2 đến Thứ 5 (Thứ 6 không bị ảnh hưởng)
+            if (force) {
+                const thursday = addDays(monday, 3);
+                await PhanCongTrucGV.destroy({
+                    where: { ngay: { [Op.between]: [monday, thursday] } },
+                    transaction: t,
+                });
+                // Xóa cờ is_nghi nếu có trong khoảng T2-T5
+                await CauHinhNgay.destroy({ where: { ngay: { [Op.between]: [monday, thursday] }, is_nghi: true }, transaction: t });
+            }
 
-      // Chỉ nạp Thứ 2 -> Thứ 5 (i = 0..3). Thứ 6 là ngày dạy bù / nghỉ, Admin tự thêm khi cần.
-      for (let i = 0; i < 4; i++) {
-        const ngay = addDays(monday, i);
-        const khung = await LichTrucCoDinh.findAll({
-          where: { thu: i },
-          include: [{ association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
-          transaction: t,
-        });
-        for (const k of khung) {
-          const loai_truc = k.phong.loai_phong;
-          
-          // Nếu không ghi đè (vì force=true đã xóa sạch ở trên rồi nên không cần check exists ở đây nếu force=true)
-          if (!force) {
-            const exists = await PhanCongTrucGV.findOne({
-              where: { ma_gv_id: k.ma_gv_id, ngay, loai_truc, ma_phong_id: k.ma_phong_id },
-              transaction: t,
+            // Chỉ nạp Thứ 2 -> Thứ 5 (i = 0..3). Thứ 6 là ngày dạy bù / nghỉ, Admin tự thêm khi cần.
+            for (let i = 0; i < 4; i++) {
+                const ngay = addDays(monday, i);
+                const khung = await LichTrucCoDinh.findAll({
+                    where: { thu: i },
+                    include: [{ association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
+                    transaction: t,
+                });
+                for (const k of khung) {
+                    const loai_truc = k.phong.loai_phong;
+
+                    // Nếu không ghi đè, chỉ điền vào nếu phòng này chưa có giáo viên nào trực trong buổi đó
+                    if (!force) {
+                        const countInRoom = await PhanCongTrucGV.count({
+                            where: { ngay, loai_truc, ma_phong_id: k.ma_phong_id },
+                            transaction: t,
+                        });
+                        if (countInRoom > 0) {
+                            skipped++;
+                            continue;
+                        }
+                    }
+
+                    await PhanCongTrucGV.create({
+                        ma_gv_id: k.ma_gv_id,
+                        ma_phong_id: k.ma_phong_id,
+                        ngay, loai_truc,
+                        nhiem_vu: k.nhiem_vu ?? 0,
+                        xac_nhan_truc: true,
+                        ngay_cap_nhat: now,
+                        nguoi_cap_nhat_id,
+                    }, { transaction: t });
+                    inserted++;
+                }
+            }
+            await t.commit();
+            return res.json({
+                ok: true,
+                message: `Đồng bộ thành công tuần ${monday}. Đã nạp: ${inserted} lượt trực${skipped ? `, bỏ qua: ${skipped}` : ''}.`,
+                inserted, skipped, tuan: monday,
             });
-            if (exists) { skipped++; continue; }
-          }
-
-          await PhanCongTrucGV.create({
-            ma_gv_id: k.ma_gv_id,
-            ma_phong_id: k.ma_phong_id,
-            ngay, loai_truc,
-            xac_nhan_truc: true,
-            ngay_cap_nhat: now,
-            nguoi_cap_nhat_id,
-          }, { transaction: t });
-          inserted++;
-        }
-      }
-      await t.commit();
-      return res.json({
-        ok: true,
-        message: `Nạp xong tuần ${monday}. Thêm/cập nhật: ${inserted}, bỏ qua: ${skipped}`,
-        inserted, skipped, tuan: monday,
-      });
-    } catch (e) { await t.rollback(); throw e; }
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        } catch (e) { await t.rollback(); throw e; }
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/apply-day-bu/ - Nạp lịch 1 ngày cố định vào 1 ngày thực tế (Dạy bù) */
 router.post('/api/lichtruc/apply-day-bu/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { targetDate, sourceThu, force = false } = req.body; // sourceThu: 0=T2, ..., 4=T6
-    if (!targetDate || sourceThu === undefined) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
-
-    const nguoi_cap_nhat_id = req.session?.user?.id || null;
-    const now = new Date();
-    const t = await sequelize.transaction();
-    let inserted = 0, skipped = 0;
-
     try {
-      // Bỏ cờ is_nghi nếu ngày này đang bị đánh dấu nghỉ
-      await CauHinhNgay.destroy({ where: { ngay: targetDate, is_nghi: true }, transaction: t });
+        const { targetDate, sourceThu, force = true } = req.body; // sourceThu: 0=T2, ..., 4=T6
+        if (!targetDate || sourceThu === undefined) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
 
-      const khung = await LichTrucCoDinh.findAll({
-        where: { thu: sourceThu },
-        include: [{ association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
-        transaction: t,
-      });
+        const nguoi_cap_nhat_id = req.session?.user?.id || null;
+        const now = new Date();
+        const t = await sequelize.transaction();
+        let inserted = 0, skipped = 0;
 
-      for (const k of khung) {
-        const loai_truc = k.phong.loai_phong;
-        const exists = await PhanCongTrucGV.findOne({
-          where: { ma_gv_id: k.ma_gv_id, ngay: targetDate, loai_truc, ma_phong_id: k.ma_phong_id },
-          transaction: t,
-        });
+        try {
+            // Bỏ cờ is_nghi nếu ngày này đang bị đánh dấu nghỉ
+            await CauHinhNgay.destroy({ where: { ngay: targetDate, is_nghi: true }, transaction: t });
 
-        if (exists) {
-          if (!force) { skipped++; continue; }
-          await exists.update({ ngay_cap_nhat: now, nguoi_cap_nhat_id }, { transaction: t });
-          inserted++;
-          continue;
-        }
+            if (force) {
+                await PhanCongTrucGV.destroy({ where: { ngay: targetDate }, transaction: t });
+            }
 
-        await PhanCongTrucGV.create({
-          ma_gv_id: k.ma_gv_id,
-          ma_phong_id: k.ma_phong_id,
-          ngay: targetDate, 
-          loai_truc,
-          xac_nhan_truc: true,
-          ngay_cap_nhat: now,
-          nguoi_cap_nhat_id,
-        }, { transaction: t });
-        inserted++;
-      }
+            const khung = await LichTrucCoDinh.findAll({
+                where: { thu: sourceThu },
+                include: [{ association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
+                transaction: t,
+            });
 
-      await t.commit();
-      return res.json({ ok: true, message: `Đã nạp lịch Thứ ${sourceThu + 2} vào ngày ${targetDate}. Thêm/cập nhật: ${inserted}, bỏ qua: ${skipped}` });
-    } catch (e) { await t.rollback(); throw e; }
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+            for (const k of khung) {
+                const loai_truc = k.phong.loai_phong;
+                if (!force) {
+                    const countInRoom = await PhanCongTrucGV.count({
+                        where: { ngay: targetDate, loai_truc, ma_phong_id: k.ma_phong_id },
+                        transaction: t,
+                    });
+                    if (countInRoom > 0) {
+                        skipped++;
+                        continue;
+                    }
+                }
+
+                await PhanCongTrucGV.create({
+                    ma_gv_id: k.ma_gv_id,
+                    ma_phong_id: k.ma_phong_id,
+                    ngay: targetDate,
+                    loai_truc,
+                    nhiem_vu: k.nhiem_vu ?? 0,
+                    xac_nhan_truc: true,
+                    ngay_cap_nhat: now,
+                    nguoi_cap_nhat_id,
+                }, { transaction: t });
+                inserted++;
+            }
+
+            await t.commit();
+            return res.json({ ok: true, message: `Đã nạp lịch Thứ ${sourceThu + 2} vào ngày ${targetDate}. Đã nạp: ${inserted} lượt trực${skipped ? `, bỏ qua: ${skipped}` : ''}.` });
+        } catch (e) { await t.rollback(); throw e; }
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** POST /api/lichtruc/clear-day/ - Xóa lịch nguyên 1 ngày (Đánh dấu nghỉ bán trú) */
 router.post('/api/lichtruc/clear-day/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { ngay } = req.body;
-    if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
-    const count = await PhanCongTrucGV.destroy({ where: { ngay } });
-    const countDiemDanh = await DiemDanhHS.destroy({ where: { ngay } });
-    await DiemDanhPhong.destroy({ where: { ngay } });
-    await CauHinhNgay.upsert({ ngay, is_nghi: true, lop_ap_dung: null, hs_loai_tru: null, hs_them_vao: null, ghi_chu: null });
-    return res.json({ ok: true, message: `Đã xóa toàn bộ ${count} phân công GV và ${countDiemDanh} điểm danh HS ngày ${ngay}. Hôm nay sẽ nghỉ bán trú.` });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    try {
+        const { ngay } = req.body;
+        if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày' });
+        const count = await PhanCongTrucGV.destroy({ where: { ngay } });
+        const countDiemDanh = await DiemDanhHS.destroy({ where: { ngay } });
+        await DiemDanhPhong.destroy({ where: { ngay } });
+        await CauHinhNgay.upsert({ ngay, is_nghi: true, lop_ap_dung: null, hs_loai_tru: null, hs_them_vao: null, ghi_chu: null });
+        return res.json({ ok: true, message: `Đã xóa toàn bộ ${count} phân công GV và ${countDiemDanh} điểm danh HS ngày ${ngay}. Hôm nay sẽ nghỉ bán trú.` });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/lichtruc/audit-log/?tuan= - Xem lịch sử cập nhật phân công */
 router.get('/api/lichtruc/audit-log/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const tuan = getMondayOfWeek(req.query.tuan);
-    const cuoi = addDays(tuan, 6);
-    const records = await PhanCongTrucGV.findAll({
-      where: {
-        ngay: { [Op.between]: [tuan, cuoi] },
-        ngay_cap_nhat: { [Op.ne]: null },
-      },
-      include: [
-        { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
-        { association: 'phong', attributes: ['ma_phong', 'loai_phong'] },
-      ],
-      order: [['ngay_cap_nhat', 'DESC']],
-    });
-    // Lấy thông tin người cập nhật
-    const nguoiIds = [...new Set(records.filter(r => r.nguoi_cap_nhat_id).map(r => r.nguoi_cap_nhat_id))];
-    const nguoiList = nguoiIds.length > 0
-      ? await StaffUser.findAll({ where: { id: { [Op.in]: nguoiIds } }, attributes: ['id', 'fullname', 'username'] })
-      : [];
-    const nguoiMap = {};
-    nguoiList.forEach(u => { nguoiMap[u.id] = u; });
+    try {
+        const tuan = getMondayOfWeek(req.query.tuan);
+        const cuoi = addDays(tuan, 6);
+        const records = await PhanCongTrucGV.findAll({
+            where: {
+                ngay: { [Op.between]: [tuan, cuoi] },
+                ngay_cap_nhat: { [Op.ne]: null },
+            },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
+                { association: 'phong', attributes: ['ma_phong', 'loai_phong'] },
+            ],
+            order: [['ngay_cap_nhat', 'DESC']],
+        });
+        // Lấy thông tin người cập nhật
+        const nguoiIds = [...new Set(records.filter(r => r.nguoi_cap_nhat_id).map(r => r.nguoi_cap_nhat_id))];
+        const nguoiList = nguoiIds.length > 0
+            ? await StaffUser.findAll({ where: { id: { [Op.in]: nguoiIds } }, attributes: ['id', 'fullname', 'username'] })
+            : [];
+        const nguoiMap = {};
+        nguoiList.forEach(u => { nguoiMap[u.id] = u; });
 
-    const data = records.map(r => ({
-      id: r.id,
-      giao_vien: r.giao_vien?.ho_ten,
-      phong: r.phong?.ma_phong,
-      loai_truc: r.loai_truc === 0 ? 'Ăn' : 'Ngủ',
-      ngay: r.ngay,
-      ngay_cap_nhat: r.ngay_cap_nhat,
-      nguoi_cap_nhat: r.nguoi_cap_nhat_id ? (nguoiMap[r.nguoi_cap_nhat_id]?.fullname || nguoiMap[r.nguoi_cap_nhat_id]?.username) : null,
-    }));
-    return res.json({ ok: true, data, tuan });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        const data = records.map(r => ({
+            id: r.id,
+            giao_vien: r.giao_vien?.ho_ten,
+            phong: r.phong?.ma_phong,
+            loai_truc: r.loai_truc === 0 ? 'Ăn' : 'Ngủ',
+            ngay: r.ngay,
+            ngay_cap_nhat: r.ngay_cap_nhat,
+            nguoi_cap_nhat: r.nguoi_cap_nhat_id ? (nguoiMap[r.nguoi_cap_nhat_id]?.fullname || nguoiMap[r.nguoi_cap_nhat_id]?.username) : null,
+        }));
+        return res.json({ ok: true, data, tuan });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════
@@ -847,267 +909,267 @@ router.get('/api/lichtruc/audit-log/', loginRequired, roleRequired('admin', 'qua
 
 /** GET /api/baocao/diemdanh/?loai=&thang=&nam=&lop= */
 router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
-  try {
-    const { loai, thang, nam, lop } = req.query;
-    const year = nam || new Date().getFullYear();
-    const month = thang || (new Date().getMonth() + 1);
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+    try {
+        const { loai, thang, nam, lop } = req.query;
+        const year = nam || new Date().getFullYear();
+        const month = thang || (new Date().getMonth() + 1);
+        const start = `${year}-${String(month).padStart(2, '0')}-01`;
+        const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
 
-    const hsWhere = { dang_hoc: true };
-    if (lop) hsWhere.lop = lop;
+        const hsWhere = { dang_hoc: true };
+        if (lop) hsWhere.lop = lop;
 
-    const hsList = await HocSinh.findAll({ where: hsWhere, attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh'] });
-    const hsIds = hsList.map(h => h.id);
+        const hsList = await HocSinh.findAll({ where: hsWhere, attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh'] });
+        const hsIds = hsList.map(h => h.id);
 
-    const records = await DiemDanhHS.findAll({ where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } } });
+        const records = await DiemDanhHS.findAll({ where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } } });
 
-    // Lấy tất cả cấu hình ngày đặc biệt trong tháng
-    const cauhinhNgayList = await CauHinhNgay.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-    });
-    const cauhinhNgayMap = {}; // { 'YYYY-MM-DD': CauHinhNgay }
-    cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+        // Lấy tất cả cấu hình ngày đặc biệt trong tháng
+        const cauhinhNgayList = await CauHinhNgay.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+        });
+        const cauhinhNgayMap = {}; // { 'YYYY-MM-DD': CauHinhNgay }
+        cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
 
-    // Lấy tất cả ngày có bán trú ăn trong tháng
-    const pcAnRecords = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
-      attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
-      raw: true,
-    });
-    const ngayBanTruAn = pcAnRecords.map(r => r.ngay).sort();
+        // Lấy tất cả ngày có bán trú ăn trong tháng
+        const pcAnRecords = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+            raw: true,
+        });
+        const ngayBanTruAn = pcAnRecords.map(r => r.ngay).sort();
 
-    // Lấy tất cả ngày có bán trú ngủ trong tháng
-    const pcNguRecords = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
-      attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
-      raw: true,
-    });
-    const ngayBanTruNgu = pcNguRecords.map(r => r.ngay).sort();
+        // Lấy tất cả ngày có bán trú ngủ trong tháng
+        const pcNguRecords = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+            raw: true,
+        });
+        const ngayBanTruNgu = pcNguRecords.map(r => r.ngay).sort();
 
-    const ddMap = {};
-    records.forEach(r => {
-      if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = [];
-      ddMap[r.ma_hs_id].push(r);
-    });
+        const ddMap = {};
+        records.forEach(r => {
+            if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = [];
+            ddMap[r.ma_hs_id].push(r);
+        });
 
-    const data = hsList.map(hs => {
-      const recs = ddMap[hs.id] || [];
-      // Tính số ngày HS thực sự phải tham gia (loại trừ ngày đặc biệt không dành cho HS đó)
-      const ngayPhai_An = ngayBanTruAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
-      const ngayPhai_Ngu = ngayBanTruNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
-      return {
-        id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
-        so_ngay_phai_di_an: ngayPhai_An.length,
-        so_ngay_phai_di_ngu: ngayPhai_Ngu.length,
-        so_ngay_co_mat_an: recs.filter(r => r.diem_danh_an === 0 && ngayPhai_An.includes(r.ngay)).length,
-        so_ngay_vang_an: recs.filter(r => r.diem_danh_an === 1 && ngayPhai_An.includes(r.ngay)).length,
-        so_ngay_phep_an: recs.filter(r => r.diem_danh_an === 2 && ngayPhai_An.includes(r.ngay)).length,
-        so_ngay_co_mat_ngu: recs.filter(r => r.diem_danh_ngu === 0 && ngayPhai_Ngu.includes(r.ngay)).length,
-        so_ngay_vang_ngu: recs.filter(r => r.diem_danh_ngu === 1 && ngayPhai_Ngu.includes(r.ngay)).length,
-        so_ngay_phep_ngu: recs.filter(r => r.diem_danh_ngu === 2 && ngayPhai_Ngu.includes(r.ngay)).length,
-      };
-    });
+        const data = hsList.map(hs => {
+            const recs = ddMap[hs.id] || [];
+            // Tính số ngày HS thực sự phải tham gia (loại trừ ngày đặc biệt không dành cho HS đó)
+            const ngayPhai_An = ngayBanTruAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+            const ngayPhai_Ngu = ngayBanTruNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+            return {
+                id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
+                so_ngay_phai_di_an: ngayPhai_An.length,
+                so_ngay_phai_di_ngu: ngayPhai_Ngu.length,
+                so_ngay_co_mat_an: recs.filter(r => r.diem_danh_an === 0 && ngayPhai_An.includes(r.ngay)).length,
+                so_ngay_vang_an: recs.filter(r => r.diem_danh_an === 1 && ngayPhai_An.includes(r.ngay)).length,
+                so_ngay_phep_an: recs.filter(r => r.diem_danh_an === 2 && ngayPhai_An.includes(r.ngay)).length,
+                so_ngay_co_mat_ngu: recs.filter(r => r.diem_danh_ngu === 0 && ngayPhai_Ngu.includes(r.ngay)).length,
+                so_ngay_vang_ngu: recs.filter(r => r.diem_danh_ngu === 1 && ngayPhai_Ngu.includes(r.ngay)).length,
+                so_ngay_phep_ngu: recs.filter(r => r.diem_danh_ngu === 2 && ngayPhai_Ngu.includes(r.ngay)).length,
+            };
+        });
 
-    return res.json({ ok: true, data, thang: `${year}-${month}` });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({ ok: true, data, thang: `${year}-${month}` });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/baocao/export-an/?thang=MM&nam=YYYY - Xuất báo cáo điểm danh ăn chính thức theo tháng */
 router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
-  try {
-    const { thang, nam } = req.query;
-    const year = parseInt(nam) || new Date().getFullYear();
-    const month = parseInt(thang) || (new Date().getMonth() + 1);
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(year, month, 0).toISOString().split('T')[0];
+    try {
+        const { thang, nam } = req.query;
+        const year = parseInt(nam) || new Date().getFullYear();
+        const month = parseInt(thang) || (new Date().getMonth() + 1);
+        const start = `${year}-${String(month).padStart(2, '0')}-01`;
+        const end = new Date(year, month, 0).toISOString().split('T')[0];
 
-    // 1. Lấy các ngày thực sự có bán trú (ăn) trong tháng từ PhanCongTrucGV
-    const phanCongRecords = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
-      attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
-      order: [['ngay', 'ASC']],
-      raw: true,
-    });
-    const ngayBanTru = phanCongRecords.map(r => r.ngay).sort();
+        // 1. Lấy các ngày thực sự có bán trú (ăn) trong tháng từ PhanCongTrucGV
+        const phanCongRecords = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+            order: [['ngay', 'ASC']],
+            raw: true,
+        });
+        const ngayBanTru = phanCongRecords.map(r => r.ngay).sort();
 
-    // 2. Lấy danh sách phòng ăn
-    const phongList = await Phong.findAll({ where: { loai_phong: 0 }, order: [['ma_phong', 'ASC']] });
+        // 2. Lấy danh sách phòng ăn
+        const phongList = await Phong.findAll({ where: { loai_phong: 0 }, order: [['ma_phong', 'ASC']] });
 
-    // 3. Lấy danh sách học sinh kèm phòng ăn
-    const hsList = await HocSinh.findAll({
-      where: { dang_hoc: true },
-      include: [{ association: 'phong_an', attributes: ['ma_phong'] }],
-      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
-    });
-    const hsIds = hsList.map(h => h.id);
+        // 3. Lấy danh sách học sinh kèm phòng ăn
+        const hsList = await HocSinh.findAll({
+            where: { dang_hoc: true },
+            include: [{ association: 'phong_an', attributes: ['ma_phong'] }],
+            order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+        });
+        const hsIds = hsList.map(h => h.id);
 
-    // 4a. Lấy cấu hình ngày đặc biệt trong tháng (cho export)
-    const cauhinhNgayListAn = await CauHinhNgay.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-    });
-    const ngayDacBietMapAn = {};
-    cauhinhNgayListAn.forEach(c => {
-      ngayDacBietMapAn[c.ngay] = {
-        lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
-        hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
-      };
-    });
+        // 4a. Lấy cấu hình ngày đặc biệt trong tháng (cho export)
+        const cauhinhNgayListAn = await CauHinhNgay.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+        });
+        const ngayDacBietMapAn = {};
+        cauhinhNgayListAn.forEach(c => {
+            ngayDacBietMapAn[c.ngay] = {
+                lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
+                hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
+            };
+        });
 
-    // 4b. Lấy toàn bộ dữ liệu điểm danh ăn trong tháng
-    const ddRecords = await DiemDanhHS.findAll({
-      where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
-      attributes: ['ma_hs_id', 'ngay', 'diem_danh_an'],
-    });
+        // 4b. Lấy toàn bộ dữ liệu điểm danh ăn trong tháng
+        const ddRecords = await DiemDanhHS.findAll({
+            where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an'],
+        });
 
-    // Build ddMap: { hsId: { 'YYYY-MM-DD': 0|1|2 } }
-    const ddMap = {};
-    ddRecords.forEach(r => {
-      if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
-      ddMap[r.ma_hs_id][r.ngay] = r.diem_danh_an;
-    });
+        // Build ddMap: { hsId: { 'YYYY-MM-DD': 0|1|2 } }
+        const ddMap = {};
+        ddRecords.forEach(r => {
+            if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
+            ddMap[r.ma_hs_id][r.ngay] = r.diem_danh_an;
+        });
 
-    // 5. Gom học sinh theo phòng, gắn dữ liệu điểm danh từng ngày
-    const dataByPhong = {};
-    phongList.forEach(p => { dataByPhong[p.ma_phong] = []; });
+        // 5. Gom học sinh theo phòng, gắn dữ liệu điểm danh từng ngày
+        const dataByPhong = {};
+        phongList.forEach(p => { dataByPhong[p.ma_phong] = []; });
 
-    hsList.forEach(hs => {
-      const maPhong = hs.phong_an?.ma_phong;
-      if (!maPhong || !dataByPhong[maPhong]) return;
-      const hsDD = ddMap[hs.id] || {};
-      // Chỉ lấy giá trị của các ngày có bán trú thực tế
-      const diemdanh = {};
-      ngayBanTru.forEach(ngay => {
-        diemdanh[ngay] = hsDD[ngay] !== undefined ? hsDD[ngay] : null;
-      });
-      const hasAny = Object.values(diemdanh).some(v => v !== null);
-      dataByPhong[maPhong].push({
-        id: hs.id,
-        ho_ten: hs.ho_ten,
-        lop: hs.lop,
-        gioi_tinh: hs.gioi_tinh,
-        phong_an: maPhong,
-        diemdanh,
-        so_ngay_co_mat: Object.values(diemdanh).filter(v => v === 0).length,
-        so_ngay_vang: Object.values(diemdanh).filter(v => v === 1).length,
-        so_ngay_phep: Object.values(diemdanh).filter(v => v === 2).length,
-        da_diemdanh: hasAny,
-      });
-    });
+        hsList.forEach(hs => {
+            const maPhong = hs.phong_an?.ma_phong;
+            if (!maPhong || !dataByPhong[maPhong]) return;
+            const hsDD = ddMap[hs.id] || {};
+            // Chỉ lấy giá trị của các ngày có bán trú thực tế
+            const diemdanh = {};
+            ngayBanTru.forEach(ngay => {
+                diemdanh[ngay] = hsDD[ngay] !== undefined ? hsDD[ngay] : null;
+            });
+            const hasAny = Object.values(diemdanh).some(v => v !== null);
+            dataByPhong[maPhong].push({
+                id: hs.id,
+                ho_ten: hs.ho_ten,
+                lop: hs.lop,
+                gioi_tinh: hs.gioi_tinh,
+                phong_an: maPhong,
+                diemdanh,
+                so_ngay_co_mat: Object.values(diemdanh).filter(v => v === 0).length,
+                so_ngay_vang: Object.values(diemdanh).filter(v => v === 1).length,
+                so_ngay_phep: Object.values(diemdanh).filter(v => v === 2).length,
+                da_diemdanh: hasAny,
+            });
+        });
 
-    // 6. Lấy cấu hình hệ thống
-    const [cauhinh] = await CauHinhHeThong.findOrCreate({
-      where: { id: 1 },
-      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
-    });
+        // 6. Lấy cấu hình hệ thống
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({
+            where: { id: 1 },
+            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
+        });
 
-    return res.json({
-      ok: true,
-      thang: `${year}-${String(month).padStart(2, '0')}`,
-      so_thang: month,
-      so_nam: year,
-      ngay_ban_tru: ngayBanTru,
-      tong_buoi_bantru: ngayBanTru.length,
-      phong_list: phongList.map(p => p.ma_phong),
-      data: dataByPhong,
-      ngay_dac_biet_map: ngayDacBietMapAn,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
-      nam_hoc: cauhinh.nam_hoc,
-      nguoi_phu_trach: cauhinh.nguoi_phu_trach,
-    });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({
+            ok: true,
+            thang: `${year}-${String(month).padStart(2, '0')}`,
+            so_thang: month,
+            so_nam: year,
+            ngay_ban_tru: ngayBanTru,
+            tong_buoi_bantru: ngayBanTru.length,
+            phong_list: phongList.map(p => p.ma_phong),
+            data: dataByPhong,
+            ngay_dac_biet_map: ngayDacBietMapAn,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
+            nam_hoc: cauhinh.nam_hoc,
+            nguoi_phu_trach: cauhinh.nguoi_phu_trach,
+        });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/baocao/export-ngu/?thang=MM&nam=YYYY - Xuất báo cáo điểm danh ngủ chính thức theo tháng */
 router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
-  try {
-    const { thang, nam } = req.query;
-    const year = parseInt(nam) || new Date().getFullYear();
-    const month = parseInt(thang) || (new Date().getMonth() + 1);
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(year, month, 0).toISOString().split('T')[0];
+    try {
+        const { thang, nam } = req.query;
+        const year = parseInt(nam) || new Date().getFullYear();
+        const month = parseInt(thang) || (new Date().getMonth() + 1);
+        const start = `${year}-${String(month).padStart(2, '0')}-01`;
+        const end = new Date(year, month, 0).toISOString().split('T')[0];
 
-    // 1. Các ngày có bán trú (ngủ) từ PhanCongTrucGV
-    const phanCongRecords = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
-      attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
-      order: [['ngay', 'ASC']],
-      raw: true,
-    });
-    const ngayBanTru = phanCongRecords.map(r => r.ngay).sort();
+        // 1. Các ngày có bán trú (ngủ) từ PhanCongTrucGV
+        const phanCongRecords = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+            order: [['ngay', 'ASC']],
+            raw: true,
+        });
+        const ngayBanTru = phanCongRecords.map(r => r.ngay).sort();
 
-    // 2. Danh sách phòng ngủ
-    const phongList = await Phong.findAll({ where: { loai_phong: 1 }, order: [['ma_phong', 'ASC']] });
+        // 2. Danh sách phòng ngủ
+        const phongList = await Phong.findAll({ where: { loai_phong: 1 }, order: [['ma_phong', 'ASC']] });
 
-    // 3. Học sinh kèm phòng ngủ
-    const hsList = await HocSinh.findAll({
-      where: { dang_hoc: true },
-      include: [{ association: 'phong_ngu', attributes: ['ma_phong', 'gioi_tinh'] }],
-      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
-    });
-    const hsIds = hsList.map(h => h.id);
+        // 3. Học sinh kèm phòng ngủ
+        const hsList = await HocSinh.findAll({
+            where: { dang_hoc: true },
+            include: [{ association: 'phong_ngu', attributes: ['ma_phong', 'gioi_tinh'] }],
+            order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+        });
+        const hsIds = hsList.map(h => h.id);
 
-    // 4a. Lấy cấu hình ngày đặc biệt trong tháng (cho export ngủ)
-    const cauhinhNgayListNgu = await CauHinhNgay.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-    });
-    const ngayDacBietMapNgu = {};
-    cauhinhNgayListNgu.forEach(c => {
-      ngayDacBietMapNgu[c.ngay] = {
-        lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
-        hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
-      };
-    });
+        // 4a. Lấy cấu hình ngày đặc biệt trong tháng (cho export ngủ)
+        const cauhinhNgayListNgu = await CauHinhNgay.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+        });
+        const ngayDacBietMapNgu = {};
+        cauhinhNgayListNgu.forEach(c => {
+            ngayDacBietMapNgu[c.ngay] = {
+                lop_ap_dung: c.lop_ap_dung ? JSON.parse(c.lop_ap_dung) : null,
+                hs_loai_tru: c.hs_loai_tru ? JSON.parse(c.hs_loai_tru) : null,
+            };
+        });
 
-    // 4b. Điểm danh ngủ trong tháng
-    const ddRecords = await DiemDanhHS.findAll({
-      where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
-      attributes: ['ma_hs_id', 'ngay', 'diem_danh_ngu'],
-    });
-    const ddMap = {};
-    ddRecords.forEach(r => {
-      if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
-      ddMap[r.ma_hs_id][r.ngay] = r.diem_danh_ngu;
-    });
+        // 4b. Điểm danh ngủ trong tháng
+        const ddRecords = await DiemDanhHS.findAll({
+            where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_ngu'],
+        });
+        const ddMap = {};
+        ddRecords.forEach(r => {
+            if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
+            ddMap[r.ma_hs_id][r.ngay] = r.diem_danh_ngu;
+        });
 
-    // 5. Gom theo phòng ngủ
-    const dataByPhong = {};
-    phongList.forEach(p => { dataByPhong[p.ma_phong] = []; });
-    hsList.forEach(hs => {
-      const maPhong = hs.phong_ngu?.ma_phong;
-      if (!maPhong || !dataByPhong[maPhong]) return;
-      const hsDD = ddMap[hs.id] || {};
-      const diemdanh = {};
-      ngayBanTru.forEach(ngay => { diemdanh[ngay] = hsDD[ngay] !== undefined ? hsDD[ngay] : null; });
-      const hasAny = Object.values(diemdanh).some(v => v !== null);
-      dataByPhong[maPhong].push({
-        id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
-        phong_ngu: maPhong, diemdanh,
-        so_ngay_co_mat: Object.values(diemdanh).filter(v => v === 0).length,
-        so_ngay_vang: Object.values(diemdanh).filter(v => v === 1).length,
-        so_ngay_phep: Object.values(diemdanh).filter(v => v === 2).length,
-        da_diemdanh: hasAny,
-      });
-    });
+        // 5. Gom theo phòng ngủ
+        const dataByPhong = {};
+        phongList.forEach(p => { dataByPhong[p.ma_phong] = []; });
+        hsList.forEach(hs => {
+            const maPhong = hs.phong_ngu?.ma_phong;
+            if (!maPhong || !dataByPhong[maPhong]) return;
+            const hsDD = ddMap[hs.id] || {};
+            const diemdanh = {};
+            ngayBanTru.forEach(ngay => { diemdanh[ngay] = hsDD[ngay] !== undefined ? hsDD[ngay] : null; });
+            const hasAny = Object.values(diemdanh).some(v => v !== null);
+            dataByPhong[maPhong].push({
+                id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
+                phong_ngu: maPhong, diemdanh,
+                so_ngay_co_mat: Object.values(diemdanh).filter(v => v === 0).length,
+                so_ngay_vang: Object.values(diemdanh).filter(v => v === 1).length,
+                so_ngay_phep: Object.values(diemdanh).filter(v => v === 2).length,
+                da_diemdanh: hasAny,
+            });
+        });
 
-    // 6. Cấu hình hệ thống
-    const [cauhinh] = await CauHinhHeThong.findOrCreate({
-      where: { id: 1 },
-      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
-    });
+        // 6. Cấu hình hệ thống
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({
+            where: { id: 1 },
+            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
+        });
 
-    return res.json({
-      ok: true,
-      thang: `${year}-${String(month).padStart(2, '0')}`,
-      so_thang: month, so_nam: year,
-      ngay_ban_tru: ngayBanTru,
-      tong_buoi_bantru: ngayBanTru.length,
-      phong_list: phongList.map(p => p.ma_phong),
-      data: dataByPhong,
-      ngay_dac_biet_map: ngayDacBietMapNgu,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
-      nam_hoc: cauhinh.nam_hoc,
-      nguoi_phu_trach: cauhinh.nguoi_phu_trach,
-    });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({
+            ok: true,
+            thang: `${year}-${String(month).padStart(2, '0')}`,
+            so_thang: month, so_nam: year,
+            ngay_ban_tru: ngayBanTru,
+            tong_buoi_bantru: ngayBanTru.length,
+            phong_list: phongList.map(p => p.ma_phong),
+            data: dataByPhong,
+            ngay_dac_biet_map: ngayDacBietMapNgu,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
+            nam_hoc: cauhinh.nam_hoc,
+            nguoi_phu_trach: cauhinh.nguoi_phu_trach,
+        });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/baocao/tong-hop-lop/?thang=MM&nam=YYYY&lop=
@@ -1115,243 +1177,249 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
  *  Dùng để gửi GVCN và thu tiền HS.
  */
 router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
-  try {
-    const { thang, nam, lop } = req.query;
-    const year = parseInt(nam) || new Date().getFullYear();
-    const month = parseInt(thang) || (new Date().getMonth() + 1);
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(year, month, 0).toISOString().split('T')[0];
+    try {
+        const { thang, nam, lop } = req.query;
+        const year = parseInt(nam) || new Date().getFullYear();
+        const month = parseInt(thang) || (new Date().getMonth() + 1);
+        const start = `${year}-${String(month).padStart(2, '0')}-01`;
+        const end = new Date(year, month, 0).toISOString().split('T')[0];
 
-    // 1. Ngày bán trú ăn & ngủ
-    const [pcAn, pcNgu] = await Promise.all([
-      PhanCongTrucGV.findAll({
-        where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
-        attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
-        raw: true,
-      }),
-      PhanCongTrucGV.findAll({
-        where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
-        attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
-        raw: true,
-      }),
-    ]);
-    const ngayAn = pcAn.map(r => r.ngay).sort();
-    const ngayNgu = pcNgu.map(r => r.ngay).sort();
+        // 1. Ngày bán trú ăn & ngủ
+        const [pcAn, pcNgu] = await Promise.all([
+            PhanCongTrucGV.findAll({
+                where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+                attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+                raw: true,
+            }),
+            PhanCongTrucGV.findAll({
+                where: { ngay: { [Op.between]: [start, end] }, loai_truc: 1 },
+                attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+                raw: true,
+            }),
+        ]);
+        const ngayAn = pcAn.map(r => r.ngay).sort();
+        const ngayNgu = pcNgu.map(r => r.ngay).sort();
 
-    // 2. Danh sách HS
-    const hsWhere = { dang_hoc: true };
-    if (lop) hsWhere.lop = lop;
-    const hsList = await HocSinh.findAll({
-      where: hsWhere,
-      attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh'],
-      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
-    });
-    const hsIds = hsList.map(h => h.id);
+        // 2. Danh sách HS
+        const hsWhere = { dang_hoc: true };
+        if (lop) hsWhere.lop = lop;
+        const hsList = await HocSinh.findAll({
+            where: hsWhere,
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh'],
+            order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+        });
+        const hsIds = hsList.map(h => h.id);
 
-    // 3. Cấu hình ngày đặc biệt
-    const cauhinhNgayList = await CauHinhNgay.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-    });
-    const cauhinhNgayMap = {};
-    cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+        // 3. Cấu hình ngày đặc biệt
+        const cauhinhNgayList = await CauHinhNgay.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+        });
+        const cauhinhNgayMap = {};
+        cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
 
-    // 4. Records điểm danh
-    const ddRecords = await DiemDanhHS.findAll({
-      where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
-      attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu'],
-    });
-    const ddMap = {};
-    ddRecords.forEach(r => {
-      if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
-      ddMap[r.ma_hs_id][r.ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
-    });
+        // 4. Records điểm danh
+        const ddRecords = await DiemDanhHS.findAll({
+            where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu'],
+        });
+        const ddMap = {};
+        ddRecords.forEach(r => {
+            if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
+            ddMap[r.ma_hs_id][r.ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
+        });
 
-    // 5. Giá ăn/ngủ từ cấu hình giá
-    const giaConfig = await CauHinhGia.findOne({ order: [['id', 'DESC']] });
-    const giaAn = giaConfig?.don_gia_an || 0;
-    const giaNgu = giaConfig?.don_gia_ngu || 0;
+        // 5. Giá ăn/ngủ từ cấu hình giá
+        const giaConfig = await CauHinhGia.findOne({ order: [['id', 'DESC']] });
+        const giaAn = giaConfig?.don_gia_an || 0;
+        const giaNgu = giaConfig?.don_gia_ngu || 0;
 
-    // 6. Tính toán từng HS
-    const data = hsList.map(hs => {
-      const recs = ddMap[hs.id] || {};
-      // Số ngày HS phải tham gia (loại trừ ngày đặc biệt không dành cho HS)
-      const phaiAn = ngayAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
-      const phaiNgu = ngayNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+        // 6. Tính toán từng HS
+        const data = hsList.map(hs => {
+            const recs = ddMap[hs.id] || {};
+            // Số ngày HS phải tham gia (loại trừ ngày đặc biệt không dành cho HS)
+            const phaiAn = ngayAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+            const phaiNgu = ngayNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
 
-      const vangAn  = phaiAn.filter(ng => recs[ng]?.an === 1).length;
-      const phepAn  = phaiAn.filter(ng => recs[ng]?.an === 2).length;
-      const coMatAn = phaiAn.length - vangAn - phepAn; // Thực tế là những buổi có mặt (kể cả chưa chốt điểm danh)
+            const vangAn = phaiAn.filter(ng => recs[ng]?.an === 1).length;
+            const phepAn = phaiAn.filter(ng => recs[ng]?.an === 2).length;
+            const coMatAn = phaiAn.length - vangAn - phepAn; // Thực tế là những buổi có mặt (kể cả chưa chốt điểm danh)
 
-      const vangNgu  = phaiNgu.filter(ng => recs[ng]?.ngu === 1).length;
-      const phepNgu  = phaiNgu.filter(ng => recs[ng]?.ngu === 2).length;
-      const coMatNgu = phaiNgu.length - vangNgu - phepNgu;
+            const vangNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 1).length;
+            const phepNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 2).length;
+            const coMatNgu = phaiNgu.length - vangNgu - phepNgu;
 
-      const buoiAnThucTe  = coMatAn;
-      const buoiNguThucTe = coMatNgu;
-      const tienAn  = (phaiAn.length - phepAn) * giaAn; // Vắng không trừ tiền, chỉ phép mới trừ
-      const tienNgu = (phaiNgu.length - phepNgu) * giaNgu;
+            const buoiAnThucTe = coMatAn;
+            const buoiNguThucTe = coMatNgu;
+            const tienAn = (phaiAn.length - phepAn) * giaAn; // Vắng không trừ tiền, chỉ phép mới trừ
+            const tienNgu = (phaiNgu.length - phepNgu) * giaNgu;
 
-      return {
-        id: hs.id,
-        ho_ten: hs.ho_ten,
-        lop: hs.lop,
-        gioi_tinh: hs.gioi_tinh,
-        tong_buoi_an: phaiAn.length,
-        co_mat_an: coMatAn,
-        vang_an: vangAn,
-        phep_an: phepAn,
-        tong_buoi_ngu: phaiNgu.length,
-        co_mat_ngu: coMatNgu,
-        vang_ngu: vangNgu,
-        phep_ngu: phepNgu,
-        buoi_an_thuc_te: buoiAnThucTe,
-        buoi_ngu_thuc_te: buoiNguThucTe,
-        tien_an: tienAn,
-        tien_ngu: tienNgu,
-        tong_tien: tienAn + tienNgu,
-      };
-    });
+            return {
+                id: hs.id,
+                ho_ten: hs.ho_ten,
+                lop: hs.lop,
+                gioi_tinh: hs.gioi_tinh,
+                tong_buoi_an: phaiAn.length,
+                co_mat_an: coMatAn,
+                vang_an: vangAn,
+                phep_an: phepAn,
+                tong_buoi_ngu: phaiNgu.length,
+                co_mat_ngu: coMatNgu,
+                vang_ngu: vangNgu,
+                phep_ngu: phepNgu,
+                buoi_an_thuc_te: buoiAnThucTe,
+                buoi_ngu_thuc_te: buoiNguThucTe,
+                tien_an: tienAn,
+                tien_ngu: tienNgu,
+                tong_tien: tienAn + tienNgu,
+            };
+        });
 
-    // 7. Cấu hình hệ thống
-    const [cauhinh] = await CauHinhHeThong.findOrCreate({
-      where: { id: 1 },
-      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
-    });
+        // 7. Cấu hình hệ thống
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({
+            where: { id: 1 },
+            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
+        });
 
-    return res.json({
-      ok: true,
-      so_thang: month, so_nam: year,
-      tong_buoi_an: ngayAn.length, tong_buoi_ngu: ngayNgu.length,
-      gia_an: giaAn, gia_ngu: giaNgu,
-      nam_hoc: cauhinh.nam_hoc,
-      nguoi_phu_trach: cauhinh.nguoi_phu_trach,
-      data,
-    });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        return res.json({
+            ok: true,
+            so_thang: month, so_nam: year,
+            tong_buoi_an: ngayAn.length, tong_buoi_ngu: ngayNgu.length,
+            gia_an: giaAn, gia_ngu: giaNgu,
+            nam_hoc: cauhinh.nam_hoc,
+            nguoi_phu_trach: cauhinh.nguoi_phu_trach,
+            data,
+        });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/baocao/luong-gv/?tu_ngay=&den_ngay=&thang=&nam= */
 router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
-  try {
-    let start, end;
-    if (req.query.tu_ngay && req.query.den_ngay) {
-      start = req.query.tu_ngay;
-      end = req.query.den_ngay;
-    } else {
-      const year = req.query.nam || new Date().getFullYear();
-      const month = req.query.thang || (new Date().getMonth() + 1);
-      start = `${year}-${String(month).padStart(2, '0')}-01`;
-      end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
-    }
+    try {
+        let start, end;
+        if (req.query.tu_ngay && req.query.den_ngay) {
+            start = req.query.tu_ngay;
+            end = req.query.den_ngay;
+        } else {
+            const year = req.query.nam || new Date().getFullYear();
+            const month = req.query.thang || (new Date().getMonth() + 1);
+            start = `${year}-${String(month).padStart(2, '0')}-01`;
+            end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+        }
 
-    const phanCong = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-      include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }],
-    });
+        const phanCong = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+            include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }],
+        });
 
-    const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
-    const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
+        const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
+        const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
 
-    const don_gia_an = giaAn ? parseFloat(giaAn.don_gia) : 0;
-    const don_gia_ngu = giaNgu ? parseFloat(giaNgu.don_gia) : 0;
+        const don_gia_an = giaAn ? parseFloat(giaAn.don_gia) : 0;
+        const don_gia_ngu = giaNgu ? parseFloat(giaNgu.don_gia) : 0;
 
-    const gvMap = {};
-    phanCong.forEach(pc => {
-      const id = pc.ma_gv_id;
-      if (!gvMap[id]) gvMap[id] = { 
-        id, 
-        ho_ten: pc.giao_vien?.ho_ten || '', 
-        so_ca_an: 0, 
-        so_ca_ngu: 0, 
-        tong_tien: 0, 
-        ngay_an: [], 
-        ngay_ngu: []
-      };
+        // Đếm lượt trực DISTINCT theo (gv, ngày, ca) – 1 GV trực nhiều phòng cùng ca/ngày chỉ tính 1 lượt
+        const gvMap = {};
+        const seenShift = new Set();
+        phanCong.forEach(pc => {
+            const id = pc.ma_gv_id;
+            if (!gvMap[id]) gvMap[id] = {
+                id,
+                ho_ten: pc.giao_vien?.ho_ten || '',
+                so_ca_an: 0,
+                so_ca_ngu: 0,
+                tong_tien: 0,
+                ngay_an: [],
+                ngay_ngu: []
+            };
 
-      if (pc.loai_truc === 0) { 
-        gvMap[id].so_ca_an++; 
-        gvMap[id].tong_tien += don_gia_an; 
-        gvMap[id].ngay_an.push(pc.ngay);
-      } else { 
-        gvMap[id].so_ca_ngu++; 
-        gvMap[id].tong_tien += don_gia_ngu; 
-        gvMap[id].ngay_ngu.push(pc.ngay);
-      }
-    });
-    const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
-    const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
+            const shiftKey = `${id}_${pc.ngay}_${pc.loai_truc}`;
+            if (seenShift.has(shiftKey)) return; // Đã tính lượt này rồi, bỏ qua (GV trực nhiều phòng)
+            seenShift.add(shiftKey);
 
-    return res.json({ 
-      ok: true, 
-      data: Object.values(gvMap), 
-      don_gia_an, 
-      don_gia_ngu, 
-      quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
-      ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
-    });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+            if (pc.loai_truc === 0) {
+                gvMap[id].so_ca_an++;
+                gvMap[id].tong_tien += don_gia_an;
+                gvMap[id].ngay_an.push(pc.ngay);
+            } else {
+                gvMap[id].so_ca_ngu++;
+                gvMap[id].tong_tien += don_gia_ngu;
+                gvMap[id].ngay_ngu.push(pc.ngay);
+            }
+        });
+        const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
+        const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
+
+        return res.json({
+            ok: true,
+            data: Object.values(gvMap),
+            don_gia_an,
+            don_gia_ngu,
+            quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
+            ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
+        });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 /** GET /api/baocao/full/ */
 router.get('/api/baocao/full/', loginRequired, async (req, res) => {
-  try {
-    const now = new Date();
-    const months = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      months.push({ year: d.getFullYear(), month: d.getMonth() + 1 });
-    }
+    try {
+        const now = new Date();
+        const months = [];
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            months.push({ year: d.getFullYear(), month: d.getMonth() + 1 });
+        }
 
-    const results = [];
-    for (const { year, month } of months) {
-      const start = `${year}-${String(month).padStart(2, '0')}-01`;
-      const end = new Date(year, month, 0).toISOString().split('T')[0];
-      const [tongHS, diemDanh] = await Promise.all([
-        HocSinh.count({ where: { dang_hoc: true } }),
-        DiemDanhHS.count({ where: { ngay: { [Op.between]: [start, end] }, diem_danh_an: 0 } }),
-      ]);
-      results.push({ thang: `${year}-${String(month).padStart(2, '0')}`, tong_hs: tongHS, tong_diemdanh: diemDanh });
-    }
-    return res.json({ ok: true, data: results });
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        const results = [];
+        for (const { year, month } of months) {
+            const start = `${year}-${String(month).padStart(2, '0')}-01`;
+            const end = new Date(year, month, 0).toISOString().split('T')[0];
+            const [tongHS, diemDanh] = await Promise.all([
+                HocSinh.count({ where: { dang_hoc: true } }),
+                DiemDanhHS.count({ where: { ngay: { [Op.between]: [start, end] }, diem_danh_an: 0 } }),
+            ]);
+            results.push({ thang: `${year}-${String(month).padStart(2, '0')}`, tong_hs: tongHS, tong_diemdanh: diemDanh });
+        }
+        return res.json({ ok: true, data: results });
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ── EXPORT EXCEL ──────────────────────────────────────────────────
 /** GET /api/lichtruc/export/?tuan= */
 router.get('/api/lichtruc/export/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const tuan = getMondayOfWeek(req.query.tuan);
-    // Lấy 2 tuần (10 ngày T2-T6)
-    const days = [];
-    for (let w = 0; w < 2; w++) for (let d = 0; d < 5; d++) days.push(addDays(tuan, w * 7 + d));
+    try {
+        const tuan = getMondayOfWeek(req.query.tuan);
+        // Lấy 2 tuần (10 ngày T2-T6)
+        const days = [];
+        for (let w = 0; w < 2; w++) for (let d = 0; d < 5; d++) days.push(addDays(tuan, w * 7 + d));
 
-    const start = days[0], end = days[days.length - 1];
-    const records = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [start, end] } },
-      include: [{ association: 'giao_vien', attributes: ['ho_ten'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
-      order: [['ngay', 'ASC']],
-    });
+        const start = days[0], end = days[days.length - 1];
+        const records = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] } },
+            include: [{ association: 'giao_vien', attributes: ['ho_ten'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
+            order: [['ngay', 'ASC']],
+        });
 
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Lịch trực');
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Lịch trực');
 
-    ws.getRow(1).values = ['Ngày', 'Phòng', 'Loại', 'Giáo viên'];
-    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } };
-    ws.columns = [{ width: 14 }, { width: 10 }, { width: 10 }, { width: 28 }];
+        ws.getRow(1).values = ['Ngày', 'Phòng', 'Loại', 'Giáo viên'];
+        ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1e3a5f' } };
+        ws.columns = [{ width: 14 }, { width: 10 }, { width: 10 }, { width: 28 }];
 
-    let rowIdx = 2;
-    for (const r of records) {
-      const row = ws.getRow(rowIdx++);
-      row.values = [r.ngay, r.phong?.ma_phong, r.loai_truc === 0 ? 'Ăn' : 'Ngủ', r.giao_vien?.ho_ten];
-      row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: r.loai_truc === 0 ? 'FFfef3c7' : 'FFede9fe' } };
-    }
+        let rowIdx = 2;
+        for (const r of records) {
+            const row = ws.getRow(rowIdx++);
+            row.values = [r.ngay, r.phong?.ma_phong, r.loai_truc === 0 ? 'Ăn' : 'Ngủ', r.giao_vien?.ho_ten];
+            row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: r.loai_truc === 0 ? 'FFfef3c7' : 'FFede9fe' } };
+        }
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="lichtruc_${tuan}.xlsx"`);
-    await wb.xlsx.write(res);
-    res.end();
-  } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="lichtruc_${tuan}.xlsx"`);
+        await wb.xlsx.write(res);
+        res.end();
+    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // ══════════════════════════════════════════════
@@ -1360,28 +1428,28 @@ router.get('/api/lichtruc/export/', loginRequired, roleRequired('admin', 'quan_l
 
 /** Helper parse ngày chuẩn YYYY-MM-DD */
 function normalizeDateStr(input) {
-  if (!input) return new Date().toISOString().slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
-  // Format DD/MM/YYYY
-  const parts = String(input).split('/');
-  if (parts.length === 3) {
-    const [d, m, y] = parts;
-    return `${y.padStart(4, '20')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-  const parsed = new Date(input);
-  if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
-  }
-  return new Date().toISOString().slice(0, 10);
+    if (!input) return new Date().toISOString().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+    // Format DD/MM/YYYY
+    const parts = String(input).split('/');
+    if (parts.length === 3) {
+        const [d, m, y] = parts;
+        return `${y.padStart(4, '20')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    const parsed = new Date(input);
+    if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().slice(0, 10);
+    }
+    return new Date().toISOString().slice(0, 10);
 }
 
 /** Helper parse ca trực (0=Ăn trưa, 1=Nghỉ trưa) */
 function normalizeCaTruc(input) {
-  if (input === 0 || input === '0') return 0;
-  if (input === 1 || input === '1') return 1;
-  const str = String(input || '').toLowerCase();
-  if (str.includes('ngủ') || str.includes('nghi') || str.includes('nghỉ')) return 1;
-  return 0; // Mặc định là Ăn
+    if (input === 0 || input === '0') return 0;
+    if (input === 1 || input === '1') return 1;
+    const str = String(input || '').toLowerCase();
+    if (str.includes('ngủ') || str.includes('nghi') || str.includes('nghỉ')) return 1;
+    return 0; // Mặc định là Ăn
 }
 
 /**
@@ -1389,96 +1457,96 @@ function normalizeCaTruc(input) {
  * Nhận báo cáo tình hình trực của GV qua Google Apps Script Webhook
  */
 router.post('/api/webhook/google-form-baocao', async (req, res) => {
-  try {
-    const token = req.query.token || req.headers['x-webhook-secret'] || req.body.token || req.body.secret_key;
-    const validSecret = process.env.SESSION_SECRET || 'bantru-lthg-secret-key-2025';
+    try {
+        const token = req.query.token || req.headers['x-webhook-secret'] || req.body.token || req.body.secret_key;
+        const validSecret = process.env.SESSION_SECRET || 'bantru-lthg-secret-key-2025';
 
-    if (token && token !== validSecret && token !== 'bantru-webhook-2026') {
-      return res.status(403).json({ ok: false, error: 'Mã xác thực Webhook không hợp lệ' });
-    }
-
-    const {
-      ngay,
-      ca_truc,
-      ma_phong,
-      ho_ten_gv,
-      ma_xac_thuc,
-      sdt_xac_nhan,
-      so_hs_vang,
-      danh_sach_vang,
-      hs_vi_pham,
-      danh_sach_vi_pham,
-      tinh_hinh,
-      ghi_chu,
-      nguon,
-    } = req.body;
-
-    if (!ma_phong || !ho_ten_gv) {
-      return res.status(400).json({ ok: false, error: 'Thiếu thông tin bắt buộc: ma_phong hoặc ho_ten_gv' });
-    }
-
-    const ngayChuan = normalizeDateStr(ngay);
-    const caChuan = normalizeCaTruc(ca_truc);
-    const vangNum = parseInt(so_hs_vang, 10) || 0;
-    const maNhap = String(ma_xac_thuc || sdt_xac_nhan || '').trim().toUpperCase();
-    const viPhamContent = String(hs_vi_pham || danh_sach_vi_pham || danh_sach_vang || '').trim();
-
-    // 1. Kiểm tra mã bảo mật 5 ký tự cá nhân của Giáo viên trong CSDL
-    let isHopLe = false;
-    let matchedTeacher = null;
-    let hoTenChuan = String(ho_ten_gv || '').trim();
-
-    if (maNhap) {
-      matchedTeacher = await GiaoVien.findOne({
-        where: { ma_bao_mat: maNhap }
-      });
-
-      if (matchedTeacher) {
-        isHopLe = true;
-        // Chuẩn hóa tên giáo viên theo đúng hồ sơ trong CSDL
-        hoTenChuan = matchedTeacher.ho_ten;
-      } else {
-        // 2. Dự phòng: Kiểm tra với Master Code của hệ thống (nếu dùng mã chung của trường)
-        const heThong = await CauHinhHeThong.findByPk(1);
-        const maHeThong = heThong?.ma_bao_mat_gv ? heThong.ma_bao_mat_gv.trim().toUpperCase() : '';
-        if (maHeThong && maNhap === maHeThong) {
-          isHopLe = true;
+        if (token && token !== validSecret && token !== 'bantru-webhook-2026') {
+            return res.status(403).json({ ok: false, error: 'Mã xác thực Webhook không hợp lệ' });
         }
-      }
+
+        const {
+            ngay,
+            ca_truc,
+            ma_phong,
+            ho_ten_gv,
+            ma_xac_thuc,
+            sdt_xac_nhan,
+            so_hs_vang,
+            danh_sach_vang,
+            hs_vi_pham,
+            danh_sach_vi_pham,
+            tinh_hinh,
+            ghi_chu,
+            nguon,
+        } = req.body;
+
+        if (!ma_phong || !ho_ten_gv) {
+            return res.status(400).json({ ok: false, error: 'Thiếu thông tin bắt buộc: ma_phong hoặc ho_ten_gv' });
+        }
+
+        const ngayChuan = normalizeDateStr(ngay);
+        const caChuan = normalizeCaTruc(ca_truc);
+        const vangNum = parseInt(so_hs_vang, 10) || 0;
+        const maNhap = String(ma_xac_thuc || sdt_xac_nhan || '').trim().toUpperCase();
+        const viPhamContent = String(hs_vi_pham || danh_sach_vi_pham || danh_sach_vang || '').trim();
+
+        // 1. Kiểm tra mã bảo mật 5 ký tự cá nhân của Giáo viên trong CSDL
+        let isHopLe = false;
+        let matchedTeacher = null;
+        let hoTenChuan = String(ho_ten_gv || '').trim();
+
+        if (maNhap) {
+            matchedTeacher = await GiaoVien.findOne({
+                where: { ma_bao_mat: maNhap }
+            });
+
+            if (matchedTeacher) {
+                isHopLe = true;
+                // Chuẩn hóa tên giáo viên theo đúng hồ sơ trong CSDL
+                hoTenChuan = matchedTeacher.ho_ten;
+            } else {
+                // 2. Dự phòng: Kiểm tra với Master Code của hệ thống (nếu dùng mã chung của trường)
+                const heThong = await CauHinhHeThong.findByPk(1);
+                const maHeThong = heThong?.ma_bao_mat_gv ? heThong.ma_bao_mat_gv.trim().toUpperCase() : '';
+                if (maHeThong && maNhap === maHeThong) {
+                    isHopLe = true;
+                }
+            }
+        }
+
+        const record = await BaoCaoTruc.create({
+            ngay: ngayChuan,
+            ca_truc: caChuan,
+            ma_phong: String(ma_phong).trim().toUpperCase(),
+            ho_ten_gv: hoTenChuan || (matchedTeacher ? matchedTeacher.ho_ten : 'Giáo viên trực'),
+            ma_xac_thuc: maNhap || null,
+            sdt_xac_nhan: sdt_xac_nhan ? String(sdt_xac_nhan).trim() : null,
+            is_hop_le: isHopLe,
+            so_hs_vang: Math.max(0, vangNum),
+            danh_sach_vang: viPhamContent,
+            tinh_hinh: tinh_hinh ? String(tinh_hinh).trim() : 'Bình thường',
+            ghi_chu: ghi_chu ? String(ghi_chu).trim() : '',
+            nguon: nguon || 'google_form',
+            created_at: new Date(),
+        });
+
+        return res.json({
+            ok: true,
+            message: 'Đã nhận báo cáo ca trực thành công',
+            id: record.id,
+            is_hop_le: isHopLe,
+            data: {
+                ngay: record.ngay,
+                ca_truc: record.ca_truc,
+                ma_phong: record.ma_phong,
+                ho_ten_gv: record.ho_ten_gv,
+            },
+        });
+    } catch (err) {
+        console.error('Lỗi Webhook Báo Cáo GV:', err);
+        return res.status(500).json({ ok: false, error: err.message });
     }
-
-    const record = await BaoCaoTruc.create({
-      ngay: ngayChuan,
-      ca_truc: caChuan,
-      ma_phong: String(ma_phong).trim().toUpperCase(),
-      ho_ten_gv: hoTenChuan || (matchedTeacher ? matchedTeacher.ho_ten : 'Giáo viên trực'),
-      ma_xac_thuc: maNhap || null,
-      sdt_xac_nhan: sdt_xac_nhan ? String(sdt_xac_nhan).trim() : null,
-      is_hop_le: isHopLe,
-      so_hs_vang: Math.max(0, vangNum),
-      danh_sach_vang: viPhamContent,
-      tinh_hinh: tinh_hinh ? String(tinh_hinh).trim() : 'Bình thường',
-      ghi_chu: ghi_chu ? String(ghi_chu).trim() : '',
-      nguon: nguon || 'google_form',
-      created_at: new Date(),
-    });
-
-    return res.json({
-      ok: true,
-      message: 'Đã nhận báo cáo ca trực thành công',
-      id: record.id,
-      is_hop_le: isHopLe,
-      data: {
-        ngay: record.ngay,
-        ca_truc: record.ca_truc,
-        ma_phong: record.ma_phong,
-        ho_ten_gv: record.ho_ten_gv,
-      },
-    });
-  } catch (err) {
-    console.error('Lỗi Webhook Báo Cáo GV:', err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
 });
 
 /**
@@ -1486,63 +1554,63 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
  * Lấy danh sách báo cáo trực GV theo ngày (Admin, Quản lý, Học vụ)
  */
 router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
-  try {
-    const ngayFilter = req.query.ngay || new Date().toISOString().slice(0, 10);
-    const { ca_truc } = req.query;
+    try {
+        const ngayFilter = req.query.ngay || new Date().toISOString().slice(0, 10);
+        const { ca_truc } = req.query;
 
-    const where = { ngay: ngayFilter };
-    if (ca_truc !== undefined && ca_truc !== '' && ca_truc !== 'all') {
-      where.ca_truc = parseInt(ca_truc, 10);
+        const where = { ngay: ngayFilter };
+        if (ca_truc !== undefined && ca_truc !== '' && ca_truc !== 'all') {
+            where.ca_truc = parseInt(ca_truc, 10);
+        }
+
+        const records = await BaoCaoTruc.findAll({
+            where,
+            order: [['created_at', 'DESC'], ['id', 'DESC']],
+        });
+
+        // Lấy cấu hình hệ thống (để xem mã bảo mật hiện tại)
+        const heThong = await CauHinhHeThong.findByPk(1);
+
+        // Lấy danh sách tất cả phòng để kiểm tra tiến độ nộp báo cáo
+        const allPhong = await Phong.findAll({
+            attributes: ['ma_phong', 'loai_phong', 'suc_chua'],
+            order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']],
+        });
+
+        const reportedRoomsAn = new Set(records.filter(r => r.ca_truc === 0).map(r => r.ma_phong));
+        const reportedRoomsNgu = new Set(records.filter(r => r.ca_truc === 1).map(r => r.ma_phong));
+
+        const phongChuaBaoCaoAn = allPhong
+            .filter(p => p.loai_phong === 0 && !reportedRoomsAn.has(p.ma_phong))
+            .map(p => p.ma_phong);
+
+        const phongChuaBaoCaoNgu = allPhong
+            .filter(p => p.loai_phong === 1 && !reportedRoomsNgu.has(p.ma_phong))
+            .map(p => p.ma_phong);
+
+        const coViPhamRecords = records.filter(r => (r.danh_sach_vang && r.danh_sach_vang.trim()) || (r.so_hs_vang && r.so_hs_vang > 0));
+        const stats = {
+            total: records.length,
+            caAnCount: records.filter(r => r.ca_truc === 0).length,
+            caNguCount: records.filter(r => r.ca_truc === 1).length,
+            coViPhamCount: coViPhamRecords.length,
+            totalVang: records.reduce((sum, r) => sum + (r.so_hs_vang || 0), 0),
+            totalPhongAn: allPhong.filter(p => p.loai_phong === 0).length,
+            totalPhongNgu: allPhong.filter(p => p.loai_phong === 1).length,
+        };
+
+        return res.json({
+            ok: true,
+            ngay: ngayFilter,
+            records,
+            stats,
+            ma_bao_mat_hien_tai: heThong?.ma_bao_mat_gv || 'BT789',
+            phongChuaBaoCaoAn,
+            phongChuaBaoCaoNgu,
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
     }
-
-    const records = await BaoCaoTruc.findAll({
-      where,
-      order: [['created_at', 'DESC'], ['id', 'DESC']],
-    });
-
-    // Lấy cấu hình hệ thống (để xem mã bảo mật hiện tại)
-    const heThong = await CauHinhHeThong.findByPk(1);
-
-    // Lấy danh sách tất cả phòng để kiểm tra tiến độ nộp báo cáo
-    const allPhong = await Phong.findAll({
-      attributes: ['ma_phong', 'loai_phong', 'suc_chua'],
-      order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']],
-    });
-
-    const reportedRoomsAn = new Set(records.filter(r => r.ca_truc === 0).map(r => r.ma_phong));
-    const reportedRoomsNgu = new Set(records.filter(r => r.ca_truc === 1).map(r => r.ma_phong));
-
-    const phongChuaBaoCaoAn = allPhong
-      .filter(p => p.loai_phong === 0 && !reportedRoomsAn.has(p.ma_phong))
-      .map(p => p.ma_phong);
-
-    const phongChuaBaoCaoNgu = allPhong
-      .filter(p => p.loai_phong === 1 && !reportedRoomsNgu.has(p.ma_phong))
-      .map(p => p.ma_phong);
-
-    const coViPhamRecords = records.filter(r => (r.danh_sach_vang && r.danh_sach_vang.trim()) || (r.so_hs_vang && r.so_hs_vang > 0));
-    const stats = {
-      total: records.length,
-      caAnCount: records.filter(r => r.ca_truc === 0).length,
-      caNguCount: records.filter(r => r.ca_truc === 1).length,
-      coViPhamCount: coViPhamRecords.length,
-      totalVang: records.reduce((sum, r) => sum + (r.so_hs_vang || 0), 0),
-      totalPhongAn: allPhong.filter(p => p.loai_phong === 0).length,
-      totalPhongNgu: allPhong.filter(p => p.loai_phong === 1).length,
-    };
-
-    return res.json({
-      ok: true,
-      ngay: ngayFilter,
-      records,
-      stats,
-      ma_bao_mat_hien_tai: heThong?.ma_bao_mat_gv || 'BT789',
-      phongChuaBaoCaoAn,
-      phongChuaBaoCaoNgu,
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
 });
 
 /**
@@ -1550,17 +1618,17 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
  * Xóa 1 bản ghi báo cáo trực
  */
 router.post('/api/baocaotruc/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
-  try {
-    const { id } = req.body;
-    if (!id) return res.status(400).json({ ok: false, error: 'Thiếu ID bản ghi' });
+    try {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ ok: false, error: 'Thiếu ID bản ghi' });
 
-    const deleted = await BaoCaoTruc.destroy({ where: { id } });
-    if (!deleted) return res.status(404).json({ ok: false, error: 'Không tìm thấy bản ghi' });
+        const deleted = await BaoCaoTruc.destroy({ where: { id } });
+        if (!deleted) return res.status(404).json({ ok: false, error: 'Không tìm thấy bản ghi' });
 
-    return res.json({ ok: true, message: 'Đã xóa bản ghi báo cáo thành công' });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
+        return res.json({ ok: true, message: 'Đã xóa bản ghi báo cáo thành công' });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 module.exports = router;

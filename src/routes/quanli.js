@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -62,6 +64,44 @@ router.get('/api/hocsinh/', loginRequired, roleRequired('admin', 'quan_ly'), asy
   }
 });
 
+/** GET /api/hocsinh/export-pdf-data/ - Dữ liệu xuất danh sách học sinh theo lớp */
+router.get('/api/hocsinh/export-pdf-data/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { lop, dang_hoc } = req.query;
+    const where = {};
+    if (lop) where.lop = lop;
+    if (dang_hoc === 'true' || dang_hoc === '1') where.dang_hoc = true;
+
+    const list = await HocSinh.findAll({
+      where,
+      include: [
+        { association: 'phong_an', attributes: ['ma_phong', 'loai_phong'] },
+        { association: 'phong_ngu', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] },
+      ],
+      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+    });
+
+    const [hethong] = await CauHinhHeThong.findOrCreate({
+      where: { id: 1 },
+      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Vũ Quốc Phong', ten_truong: 'LÊ THỊ HỒNG GẤM' }
+    });
+
+    return res.json({ ok: true, he_thong: hethong, hocsinh: list });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** GET /api/hocsinh/download-pdf/:filename - Tải file PDF lưu trữ trên máy chủ nếu có */
+router.get('/api/hocsinh/download-pdf/:filename', loginRequired, (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.resolve(__dirname, '../../../Danh_Sach_HS_Theo_Lop_PDF', filename);
+  if (fs.existsSync(filePath)) {
+    return res.download(filePath);
+  }
+  return res.status(404).json({ ok: false, error: 'Không tìm thấy file PDF trên máy chủ' });
+});
+
 /** POST /api/hocsinh/save/ - Tạo / cập nhật học sinh */
 router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
@@ -93,7 +133,19 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
       await HocSinh.update(data, { where: { id } });
       return res.json({ ok: true, message: 'Cập nhật học sinh thành công' });
     } else {
-      const hs = await HocSinh.create(data);
+      let hs;
+      try {
+        hs = await HocSinh.create(data);
+      } catch (insertErr) {
+        if (insertErr.name === 'SequelizeUniqueConstraintError' || insertErr.message?.includes('unique')) {
+          await sequelize.query(`
+            SELECT setval('quanli_hocsinh_id_seq', COALESCE((SELECT MAX(id) FROM quanli_hocsinh), 1), true);
+          `);
+          hs = await HocSinh.create(data);
+        } else {
+          throw insertErr;
+        }
+      }
       return res.json({ ok: true, message: 'Thêm học sinh thành công', id: hs.id });
     }
   } catch (err) {
@@ -270,6 +322,15 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
       }
     }
 
+    // Luôn đồng bộ sequence quanli_hocsinh_id_seq theo MAX(id) sau khi import
+    try {
+      await sequelize.query(`
+        SELECT setval('quanli_hocsinh_id_seq', COALESCE((SELECT MAX(id) FROM quanli_hocsinh), 1), true);
+      `);
+    } catch (seqErr) {
+      console.error('Lỗi sync sequence sau khi import CSV:', seqErr);
+    }
+
     return res.json({ ok: true, total: rows.length, success, errors });
   } catch (err) {
     return res.status(500).json({ ok: false, error: `Lỗi xử lý file CSV: ${err.message}` });
@@ -309,10 +370,14 @@ router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), as
 
     const caThang = await PhanCongTrucGV.findAll({
       where: { ngay: { [Op.between]: [startMonth, endMonth] }, xac_nhan_truc: true },
-      attributes: ['ma_gv_id'],
+      attributes: ['ma_gv_id', 'ngay', 'loai_truc'],
     });
     const caMap = {};
-    caThang.forEach(c => { caMap[c.ma_gv_id] = (caMap[c.ma_gv_id] || 0) + 1; });
+    const seenCa = new Set();
+    caThang.forEach(c => {
+      const key = `${c.ma_gv_id}_${c.ngay}_${c.loai_truc}`;
+      if (!seenCa.has(key)) { seenCa.add(key); caMap[c.ma_gv_id] = (caMap[c.ma_gv_id] || 0) + 1; }
+    });
 
     const data = rows.map(gv => ({ ...gv.toJSON(), ca_thang: caMap[gv.id] || 0 }));
     return res.json({ ok: true, giaovien: data, total: count, page: parseInt(page), pages: Math.ceil(count / limit) });

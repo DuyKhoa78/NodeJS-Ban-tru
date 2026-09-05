@@ -33,6 +33,7 @@ router.get('/api/taikhoan/', loginRequired, roleRequired('admin'), async (req, r
 router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { id, username, fullname, position, role, is_active, password } = req.body;
+    const currentUser = req.user || req.session?.user;
 
     if (!username) return res.status(400).json({ ok: false, error: 'Username không được để trống' });
 
@@ -46,13 +47,35 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
       const user = await StaffUser.findByPk(id);
       if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy tài khoản' });
 
+      // RÀNG BUỘC: Admin con (không phải Super Admin) không được chỉnh sửa tài khoản Super Admin
+      if (user.is_superuser && !currentUser?.is_superuser) {
+        return res.status(403).json({ ok: false, error: 'Bạn không có quyền chỉnh sửa tài khoản Super Admin' });
+      }
+
+      // RÀNG BUỘC: Không ai được phép vô hiệu hóa tài khoản Super Admin
+      if (user.is_superuser && is_active === false) {
+        return res.status(400).json({ ok: false, error: 'Không thể vô hiệu hóa tài khoản Super Admin' });
+      }
+
+      // RÀNG BUỘC: Tài khoản Super Admin bắt buộc phải giữ vai trò admin
+      if (user.is_superuser && role !== 'admin') {
+        return res.status(400).json({ ok: false, error: 'Tài khoản Super Admin bắt buộc phải có vai trò admin' });
+      }
+
       // Không cho sửa username sang trùng người khác
       const dup = await StaffUser.findOne({ where: { username } });
       if (dup && dup.id !== parseInt(id)) {
         return res.status(400).json({ ok: false, error: 'Username đã tồn tại' });
       }
 
-      await user.update({ username, fullname, position, role, is_active });
+      await user.update({
+        username,
+        fullname,
+        position,
+        role: user.is_superuser ? 'admin' : role,
+        is_active: user.is_superuser ? true : is_active,
+      });
+
       return res.json({ ok: true, message: 'Cập nhật tài khoản thành công' });
     } else {
       // Create
@@ -82,15 +105,24 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
 router.post('/api/taikhoan/delete/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { id } = req.body;
-    const currentUser = req.session.user;
+    const currentUser = req.user || req.session?.user;
 
-    if (parseInt(id) === currentUser.id) {
+    if (parseInt(id) === currentUser?.id) {
       return res.status(400).json({ ok: false, error: 'Không thể xóa tài khoản đang đăng nhập' });
     }
 
     const user = await StaffUser.findByPk(id);
     if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy tài khoản' });
-    if (user.is_superuser) return res.status(400).json({ ok: false, error: 'Không thể xóa superuser' });
+
+    // RÀNG BUỘC: Không thể xóa tài khoản Super Admin
+    if (user.is_superuser) {
+      return res.status(403).json({ ok: false, error: 'Không thể xóa tài khoản Super Admin' });
+    }
+
+    // RÀNG BUỘC: Admin con không được xóa tài khoản Quản trị viên khác
+    if (user.role === 'admin' && !currentUser?.is_superuser) {
+      return res.status(403).json({ ok: false, error: 'Chỉ Super Admin mới có quyền xóa tài khoản Quản trị viên' });
+    }
 
     await user.destroy();
     return res.json({ ok: true, message: 'Đã xóa tài khoản' });
@@ -106,12 +138,19 @@ router.post('/api/taikhoan/delete/', loginRequired, roleRequired('admin'), async
 router.post('/api/taikhoan/reset-pw/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { id, new_password } = req.body;
+    const currentUser = req.user || req.session?.user;
+
     if (!new_password || new_password.length < 6) {
       return res.status(400).json({ ok: false, error: 'Mật khẩu mới ít nhất 6 ký tự' });
     }
 
     const user = await StaffUser.findByPk(id);
     if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy tài khoản' });
+
+    // RÀNG BUỘC: Admin con không được đặt lại mật khẩu cho tài khoản Super Admin
+    if (user.is_superuser && !currentUser?.is_superuser) {
+      return res.status(403).json({ ok: false, error: 'Bạn không có quyền đặt lại mật khẩu cho tài khoản Super Admin' });
+    }
 
     const hashed = await hashPassword(new_password);
     await user.update({ password: hashed });
