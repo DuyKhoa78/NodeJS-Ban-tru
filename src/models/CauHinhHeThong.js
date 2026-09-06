@@ -28,7 +28,21 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
     defaultValue: 'BT789',
     comment: 'Mã bảo mật 5 ký tự báo cáo trực GV',
   },
-
+  bao_tri: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Chế độ bảo trì toàn hệ thống',
+  },
+  thong_bao_bao_tri: {
+    type: DataTypes.STRING(500),
+    defaultValue: 'Hệ thống Quản lý Bán trú đang được bảo trì và nâng cấp định kỳ. Quý Thầy Cô và Học sinh vui lòng quay lại sau ít phút!',
+    comment: 'Nội dung thông báo bảo trì',
+  },
+  thoi_gian_bao_tri: {
+    type: DataTypes.STRING(100),
+    defaultValue: 'Dự kiến hoàn tất trong 15-30 phút',
+    comment: 'Thời gian dự kiến bảo trì',
+  },
 }, {
   tableName: 'core_cauhinhhethong',
   timestamps: false,

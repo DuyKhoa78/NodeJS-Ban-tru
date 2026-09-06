@@ -915,14 +915,46 @@ router.post('/api/cauhinh/save/', loginRequired, roleRequired('admin', 'quan_ly'
   }
 });
 
-/** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong } */
+/** GET /api/public/system-status/ - Kiểm tra trạng thái hệ thống (Public - Không cần đăng nhập) */
+router.get('/api/public/system-status/', async (req, res) => {
+  try {
+    const heThong = await CauHinhHeThong.findByPk(1);
+    return res.json({
+      ok: true,
+      bao_tri: Boolean(heThong?.bao_tri),
+      thong_bao: heThong?.thong_bao_bao_tri || 'Hệ thống Quản lý Bán trú đang được bảo trì và nâng cấp định kỳ.',
+      thoi_gian: heThong?.thoi_gian_bao_tri || 'Dự kiến hoàn tất trong 15-30 phút',
+      ten_truong: heThong?.ten_truong || 'LÊ THỊ HỒNG GẤM',
+      nam_hoc: heThong?.nam_hoc || '2026-2027',
+    });
+  } catch (err) {
+    return res.json({
+      ok: true,
+      bao_tri: false,
+      thong_bao: '',
+      thoi_gian: '',
+    });
+  }
+});
+
+/** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri } */
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
-    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv } = req.body;
-    const updateData = { id: 1, nam_hoc, nguoi_phu_trach, ten_truong, ngay_cap_nhat: new Date().toISOString().split('T')[0] };
-    if (ma_bao_mat_gv) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
+    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri } = req.body;
+    const updateData = {
+      id: 1,
+      nam_hoc,
+      nguoi_phu_trach,
+      ten_truong,
+      ngay_cap_nhat: new Date().toISOString().split('T')[0],
+    };
+    if (ma_bao_mat_gv !== undefined) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
+    if (bao_tri !== undefined) updateData.bao_tri = Boolean(bao_tri);
+    if (thong_bao_bao_tri !== undefined) updateData.thong_bao_bao_tri = String(thong_bao_bao_tri).trim();
+    if (thoi_gian_bao_tri !== undefined) updateData.thoi_gian_bao_tri = String(thoi_gian_bao_tri).trim();
+
     await CauHinhHeThong.upsert(updateData);
-    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}", Mã bảo mật GV "${updateData.ma_bao_mat_gv || 'BT789'}"`);
+    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Bảo trì=${updateData.bao_tri ? 'BẬT' : 'TẮT'}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

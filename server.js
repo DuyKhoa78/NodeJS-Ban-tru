@@ -55,8 +55,12 @@ if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
 
-// ─── Session ──────────────────────────────────────────────────────────────────
+const { attachUser, maintenanceCheck } = require('./src/middleware/auth');
+
+// ─── Session & Auth & Maintenance ──────────────────────────────────────────────
 app.use(session(sessionConfig));
+app.use(attachUser);
+app.use(maintenanceCheck);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/', authRoutes);

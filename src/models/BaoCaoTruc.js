@@ -52,6 +52,11 @@ const BaoCaoTruc = sequelize.define('BaoCaoTruc', {
     allowNull: true,
     comment: 'Chi tiết HS vắng (tên, lớp)',
   },
+  hs_vi_pham: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: 'Học sinh quậy phá, mất trật tự, vi phạm nội quy',
+  },
   tinh_hinh: {
     type: DataTypes.TEXT,
     allowNull: true,

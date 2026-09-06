@@ -107,5 +107,53 @@ function roleRequired(...roles) {
   };
 }
 
-module.exports = { loginRequired, attachUser, roleRequired };
+/**
+ * Middleware: Kiểm tra chế độ bảo trì hệ thống
+ * Khi bật bảo trì, chặn mọi truy cập ngoại trừ tài khoản Admin / Superuser
+ */
+async function maintenanceCheck(req, res, next) {
+  // Các endpoint luôn được phép đi qua
+  const bypassPaths = [
+    '/api/public/system-status/',
+    '/api/auth/login',
+    '/api/auth/logout',
+    '/api/auth/me',
+    '/login/',
+    '/logout/',
+    '/',
+    '/health',
+  ];
+
+  if (bypassPaths.includes(req.path) || req.path.startsWith('/api/auth/')) {
+    return next();
+  }
+
+  try {
+    const { CauHinhHeThong } = require('../models');
+    const heThong = await CauHinhHeThong.findByPk(1);
+    if (heThong && heThong.bao_tri) {
+      // Nếu user là admin / superuser thì cho phép truy cập
+      const user = req.user || req.session?.user;
+      if (user && (user.is_superuser || user.is_admin || user.role === 'admin')) {
+        return next();
+      }
+
+      // Trả về 503 cho API
+      if (req.path.startsWith('/api/')) {
+        return res.status(503).json({
+          ok: false,
+          maintenance: true,
+          error: heThong.thong_bao_bao_tri || 'Hệ thống Quản lý Bán trú đang được bảo trì và nâng cấp định kỳ.',
+          thoi_gian: heThong.thoi_gian_bao_tri || 'Dự kiến hoàn tất trong ít phút',
+        });
+      }
+      return res.redirect('/maintenance');
+    }
+  } catch (err) {
+    // Không chặn nếu lỗi truy vấn cấu hình
+  }
+  next();
+}
+
+module.exports = { loginRequired, attachUser, roleRequired, maintenanceCheck };
 

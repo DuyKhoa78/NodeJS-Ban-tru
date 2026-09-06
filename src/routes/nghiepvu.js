@@ -1427,26 +1427,89 @@ router.get('/api/lichtruc/export/', loginRequired, roleRequired('admin', 'quan_l
 // ══════════════════════════════════════════════
 
 /** Helper parse ngày chuẩn YYYY-MM-DD */
-function normalizeDateStr(input) {
-    if (!input) return new Date().toISOString().slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
-    // Format DD/MM/YYYY
-    const parts = String(input).split('/');
-    if (parts.length === 3) {
-        const [d, m, y] = parts;
-        return `${y.padStart(4, '20')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+function getVietnamTodayYMD() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+}
+
+/** Helper trích xuất giá trị đầu tiên khác rỗng từ danh sách đối số hoặc mảng */
+function pickFirstNonEmpty(...candidates) {
+    for (const c of candidates) {
+        if (Array.isArray(c)) {
+            for (const item of c) {
+                if (item !== null && item !== undefined && String(item).trim() !== '') {
+                    return String(item).trim();
+                }
+            }
+        } else if (c !== null && c !== undefined && String(c).trim() !== '') {
+            return String(c).trim();
+        }
     }
-    const parsed = new Date(input);
+    return '';
+}
+
+/**
+ * Trích xuất ngày chuẩn YYYY-MM-DD và thời điểm nộp submittedAt từ chuỗi ngày / timestamp
+ * Hỗ trợ các định dạng:
+ * - DD/MM/YYYY HH:mm:ss (Ví dụ: "06/09/2026 21:46:16")
+ * - DD/MM/YYYY
+ * - YYYY-MM-DD
+ * - ISO string
+ */
+function parseVNSubmissionDate(input) {
+    if (!input) return { ngay: getVietnamTodayYMD(), submittedAt: new Date() };
+    if (input instanceof Date && !isNaN(input.getTime())) {
+        return {
+            ngay: input.toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }),
+            submittedAt: input
+        };
+    }
+    const str = String(input).trim();
+    // Khớp dạng DD/MM/YYYY hoặc DD/MM/YYYY HH:mm:ss
+    const dmyMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (dmyMatch) {
+        const [, d, m, y, h, min, s] = dmyMatch;
+        const pad = (n) => String(n).padStart(2, '0');
+        const ngay = `${y}-${pad(m)}-${pad(d)}`;
+        const hour = h !== undefined ? parseInt(h, 10) : 12;
+        const minute = min !== undefined ? parseInt(min, 10) : 0;
+        const second = s !== undefined ? parseInt(s, 10) : 0;
+        const isoString = `${ngay}T${pad(hour)}:${pad(minute)}:${pad(second)}+07:00`;
+        const submittedAt = new Date(isoString);
+        return {
+            ngay,
+            submittedAt: !isNaN(submittedAt.getTime()) ? submittedAt : new Date()
+        };
+    }
+    // Khớp dạng YYYY-MM-DD
+    const ymdMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (ymdMatch) {
+        const [, y, m, d] = ymdMatch;
+        const pad = (n) => String(n).padStart(2, '0');
+        const ngay = `${y}-${pad(m)}-${pad(d)}`;
+        const parsed = new Date(str);
+        return {
+            ngay,
+            submittedAt: !isNaN(parsed.getTime()) ? parsed : new Date()
+        };
+    }
+    const parsed = new Date(str);
     if (!isNaN(parsed.getTime())) {
-        return parsed.toISOString().slice(0, 10);
+        return {
+            ngay: parsed.toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }),
+            submittedAt: parsed
+        };
     }
-    return new Date().toISOString().slice(0, 10);
+    return { ngay: getVietnamTodayYMD(), submittedAt: new Date() };
+}
+
+function normalizeDateStr(input) {
+    return parseVNSubmissionDate(input).ngay;
 }
 
 /** Helper parse ca trực (0=Ăn trưa, 1=Nghỉ trưa) */
 function normalizeCaTruc(input) {
     if (input === 0 || input === '0') return 0;
-    if (input === 1 || input === '1') return 1;
+    if (input === 1 || input === 1 || input === '1') return 1;
     const str = String(input || '').toLowerCase();
     if (str.includes('ngủ') || str.includes('nghi') || str.includes('nghỉ')) return 1;
     return 0; // Mặc định là Ăn
@@ -1455,6 +1518,7 @@ function normalizeCaTruc(input) {
 /**
  * POST /api/webhook/google-form-baocao
  * Nhận báo cáo tình hình trực của GV qua Google Apps Script Webhook
+ * Hỗ trợ cả 2 nhánh Trực ăn & Trực ngủ (cột 3..7 hoặc cột 8..12) từ Google Form / Google Sheets
  */
 router.post('/api/webhook/google-form-baocao', async (req, res) => {
     try {
@@ -1465,70 +1529,195 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             return res.status(403).json({ ok: false, error: 'Mã xác thực Webhook không hợp lệ' });
         }
 
-        const {
-            ngay,
-            ca_truc,
-            ma_phong,
-            ho_ten_gv,
-            ma_xac_thuc,
-            sdt_xac_nhan,
-            so_hs_vang,
-            danh_sach_vang,
-            hs_vi_pham,
-            danh_sach_vi_pham,
-            tinh_hinh,
-            ghi_chu,
-            nguon,
-        } = req.body;
+        // 1. Kiểm tra nếu payload được gửi dưới dạng mảng (Array / Row từ Google Sheets)
+        let bodyObj = req.body || {};
+        const rawArray = Array.isArray(req.body)
+            ? req.body
+            : (Array.isArray(req.body?.values)
+                ? req.body.values
+                : (Array.isArray(req.body?.row) ? req.body.row : null));
 
-        if (!ma_phong || !ho_ten_gv) {
-            return res.status(400).json({ ok: false, error: 'Thiếu thông tin bắt buộc: ma_phong hoặc ho_ten_gv' });
+        if (rawArray && rawArray.length >= 4) {
+            // Thứ tự cột theo Sheet của User:
+            // 0: Dấu thời gian | 1: Ca trực
+            // Ca ăn: 2: Họ và tên giáo viên | 3: Phòng ăn | 4: Tình hình chung | 5: Ghi nhận HS vi phạm nền nếp | 6: Ghi chú/Góp ý
+            // Ca ngủ: 7: Họ và tên | 8: Phòng ngủ | 9: Tình hình chung | 10: Ghi nhận HS vi phạm nề nếp | 11: Ghi chú/Góp ý
+            const rawCa = rawArray[1] || '';
+            const isCaNgu = String(rawCa).toLowerCase().includes('ngủ') ||
+                            String(rawCa).toLowerCase().includes('nghi') ||
+                            (Boolean(rawArray[8]) && !rawArray[3]);
+
+            bodyObj = {
+                timestamp: rawArray[0],
+                ca_truc: isCaNgu ? 'Trực ngủ' : 'Trực ăn',
+                ho_ten_gv: isCaNgu ? (rawArray[7] || '') : (rawArray[2] || ''),
+                ma_phong: isCaNgu ? (rawArray[8] || '') : (rawArray[3] || ''),
+                tinh_hinh: isCaNgu ? (rawArray[9] || 'Tốt') : (rawArray[4] || 'Tốt'),
+                hs_vi_pham: isCaNgu ? (rawArray[10] || '') : (rawArray[5] || ''),
+                ghi_chu: isCaNgu ? (rawArray[11] || '') : (rawArray[6] || ''),
+                nguon: 'google_sheet_row'
+            };
         }
 
-        const ngayChuan = normalizeDateStr(ngay);
-        const caChuan = normalizeCaTruc(ca_truc);
-        const vangNum = parseInt(so_hs_vang, 10) || 0;
-        const maNhap = String(ma_xac_thuc || sdt_xac_nhan || '').trim().toUpperCase();
-        const viPhamContent = String(hs_vi_pham || danh_sach_vi_pham || danh_sach_vang || '').trim();
+        // 2. Trích xuất Ca trực
+        let ca_truc_raw = pickFirstNonEmpty(
+            bodyObj.ca_truc,
+            bodyObj['Ca trực'],
+            bodyObj['ca'],
+            bodyObj['1. Ca trực']
+        );
+        // Tự động suy luận Ca trực nếu chưa có nhưng có câu hỏi phòng ăn / phòng ngủ
+        if (!ca_truc_raw) {
+            if (pickFirstNonEmpty(bodyObj['Phòng ngủ'], bodyObj.phong_ngu)) {
+                ca_truc_raw = 'Trực ngủ';
+            } else if (pickFirstNonEmpty(bodyObj['Phòng ăn'], bodyObj.phong_an)) {
+                ca_truc_raw = 'Trực ăn';
+            }
+        }
+        const caChuan = normalizeCaTruc(ca_truc_raw);
 
-        // 1. Kiểm tra mã bảo mật 5 ký tự cá nhân của Giáo viên trong CSDL
-        let isHopLe = false;
+        // 3. Trích xuất Mã phòng (Phòng ăn hoặc Phòng ngủ)
+        let ma_phong_raw = '';
+        if (caChuan === 1) {
+            ma_phong_raw = pickFirstNonEmpty(
+                bodyObj['Phòng ngủ'],
+                bodyObj.phong_ngu,
+                bodyObj.ma_phong,
+                bodyObj.phong,
+                bodyObj['2. Mã phòng trực'],
+                bodyObj['Phòng'],
+                bodyObj['Phòng ăn'],
+                bodyObj.phong_an
+            );
+        } else {
+            ma_phong_raw = pickFirstNonEmpty(
+                bodyObj['Phòng ăn'],
+                bodyObj.phong_an,
+                bodyObj.ma_phong,
+                bodyObj.phong,
+                bodyObj['2. Mã phòng trực'],
+                bodyObj['Phòng'],
+                bodyObj['Phòng ngủ'],
+                bodyObj.phong_ngu
+            );
+        }
+
+        // 4. Trích xuất Họ tên Giáo viên
+        // Ca ăn dùng "Họ và tên giáo viên", Ca ngủ dùng "Họ và tên"
+        let ho_ten_gv_raw = '';
+        if (caChuan === 1) {
+            ho_ten_gv_raw = pickFirstNonEmpty(
+                bodyObj['Họ và tên'],
+                bodyObj['Họ tên'],
+                bodyObj['Họ và tên giáo viên'],
+                bodyObj.ho_ten_gv,
+                bodyObj.ho_ten,
+                bodyObj.ten_gv,
+                bodyObj['3. Họ và tên Giáo viên trực'],
+                bodyObj['Giáo viên trực']
+            );
+        } else {
+            ho_ten_gv_raw = pickFirstNonEmpty(
+                bodyObj['Họ và tên giáo viên'],
+                bodyObj['Họ và tên'],
+                bodyObj['Họ tên'],
+                bodyObj.ho_ten_gv,
+                bodyObj.ho_ten,
+                bodyObj.ten_gv,
+                bodyObj['3. Họ và tên Giáo viên trực'],
+                bodyObj['Giáo viên trực']
+            );
+        }
+
+        if (!ma_phong_raw || !ho_ten_gv_raw) {
+            return res.status(400).json({
+                ok: false,
+                error: 'Thiếu thông tin bắt buộc: ma_phong (Phòng ăn / Phòng ngủ) hoặc ho_ten_gv (Họ và tên giáo viên)',
+                received: {
+                    ca_truc: ca_truc_raw,
+                    ma_phong: ma_phong_raw,
+                    ho_ten_gv: ho_ten_gv_raw,
+                }
+            });
+        }
+
+        // 5. Trích xuất Tình hình chung
+        const tinh_hinh_raw = pickFirstNonEmpty(
+            bodyObj.tinh_hinh,
+            bodyObj['Tình hình chung'],
+            bodyObj['Tình hình nề nếp chung'],
+            bodyObj['5. Tình hình nề nếp chung'],
+            bodyObj['Tình hình']
+        ) || 'Bình thường';
+
+        // 6. Trích xuất Ghi nhận HS vi phạm (hỗ trợ cả nền nếp và nề nếp)
+        const viPhamContent = pickFirstNonEmpty(
+            bodyObj.hs_vi_pham,
+            bodyObj.hs_bat_thuong,
+            bodyObj['Ghi nhận HS vi phạm nền nếp'],
+            bodyObj['Ghi nhận HS vi phạm nề nếp'],
+            bodyObj['Học sinh bất thường / Quậy phá / Sự cố (nếu có)'],
+            bodyObj['4. Học sinh bất thường / Quậy phá / Sự cố (nếu có)'],
+            bodyObj['Học sinh vi phạm'],
+            bodyObj['HS vi phạm'],
+            bodyObj.danh_sach_vi_pham,
+            bodyObj.hs_quay_pha,
+            bodyObj.danh_sach_quay_pha
+        );
+
+        // 7. Trích xuất Ghi chú / Góp ý / Đề xuất CSVC
+        const ghiChuContent = pickFirstNonEmpty(
+            bodyObj.ghi_chu,
+            bodyObj['Ghi chú/Góp ý'],
+            bodyObj['Ghi chú / Góp ý'],
+            bodyObj['Ghi chú'],
+            bodyObj['Góp ý'],
+            bodyObj['6. Ghi chú / Đề xuất cơ sở vật chất'],
+            bodyObj['Ghi chú / Đề xuất cơ sở vật chất']
+        );
+
+        // 8. Trích xuất Ngày & Giờ nộp (Dấu thời gian)
+        const timeInput = pickFirstNonEmpty(
+            bodyObj.thoi_gian_nop,
+            bodyObj.timestamp,
+            bodyObj.ngay,
+            bodyObj['Dấu thời gian'],
+            bodyObj['Timestamp'],
+            bodyObj['Thời gian']
+        );
+        const { ngay: ngayChuan, submittedAt } = parseVNSubmissionDate(timeInput);
+
+        const vangNum = parseInt(bodyObj.so_hs_vang, 10) || 0;
+        const maNhap = String(bodyObj.ma_xac_thuc || bodyObj.sdt_xac_nhan || '').trim().toUpperCase();
+
+        let isHopLe = true;
         let matchedTeacher = null;
-        let hoTenChuan = String(ho_ten_gv || '').trim();
+        let hoTenChuan = String(ho_ten_gv_raw).trim();
 
         if (maNhap) {
             matchedTeacher = await GiaoVien.findOne({
                 where: { ma_bao_mat: maNhap }
             });
-
             if (matchedTeacher) {
-                isHopLe = true;
-                // Chuẩn hóa tên giáo viên theo đúng hồ sơ trong CSDL
                 hoTenChuan = matchedTeacher.ho_ten;
-            } else {
-                // 2. Dự phòng: Kiểm tra với Master Code của hệ thống (nếu dùng mã chung của trường)
-                const heThong = await CauHinhHeThong.findByPk(1);
-                const maHeThong = heThong?.ma_bao_mat_gv ? heThong.ma_bao_mat_gv.trim().toUpperCase() : '';
-                if (maHeThong && maNhap === maHeThong) {
-                    isHopLe = true;
-                }
             }
         }
 
         const record = await BaoCaoTruc.create({
             ngay: ngayChuan,
             ca_truc: caChuan,
-            ma_phong: String(ma_phong).trim().toUpperCase(),
+            ma_phong: String(ma_phong_raw).trim().toUpperCase(),
             ho_ten_gv: hoTenChuan || (matchedTeacher ? matchedTeacher.ho_ten : 'Giáo viên trực'),
             ma_xac_thuc: maNhap || null,
-            sdt_xac_nhan: sdt_xac_nhan ? String(sdt_xac_nhan).trim() : null,
+            sdt_xac_nhan: bodyObj.sdt_xac_nhan ? String(bodyObj.sdt_xac_nhan).trim() : null,
             is_hop_le: isHopLe,
             so_hs_vang: Math.max(0, vangNum),
-            danh_sach_vang: viPhamContent,
-            tinh_hinh: tinh_hinh ? String(tinh_hinh).trim() : 'Bình thường',
-            ghi_chu: ghi_chu ? String(ghi_chu).trim() : '',
-            nguon: nguon || 'google_form',
-            created_at: new Date(),
+            danh_sach_vang: String(bodyObj.danh_sach_vang || '').trim(),
+            hs_vi_pham: viPhamContent,
+            tinh_hinh: tinh_hinh_raw,
+            ghi_chu: ghiChuContent,
+            nguon: bodyObj.nguon || (rawArray ? 'google_sheet' : 'google_form'),
+            created_at: !isNaN(submittedAt.getTime()) ? submittedAt : new Date(),
         });
 
         return res.json({
@@ -1538,9 +1727,13 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             is_hop_le: isHopLe,
             data: {
                 ngay: record.ngay,
-                ca_truc: record.ca_truc,
+                ca_truc: record.ca_truc === 0 ? 'Ăn trưa' : 'Nghỉ trưa',
                 ma_phong: record.ma_phong,
                 ho_ten_gv: record.ho_ten_gv,
+                tinh_hinh: record.tinh_hinh,
+                hs_vi_pham: record.hs_vi_pham,
+                ghi_chu: record.ghi_chu,
+                created_at: record.created_at,
             },
         });
     } catch (err) {
@@ -1551,24 +1744,58 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
 
 /**
  * GET /api/baocaotruc/
- * Lấy danh sách báo cáo trực GV theo ngày (Admin, Quản lý, Học vụ)
+ * Lấy danh sách báo cáo trực GV theo Ngày / Tuần / Tháng (Admin, Quản lý, Học vụ)
  */
 router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
     try {
-        const ngayFilter = req.query.ngay || new Date().toISOString().slice(0, 10);
-        const { ca_truc } = req.query;
+        const { mode, ca_truc } = req.query;
+        let start, end;
 
-        const where = { ngay: ngayFilter };
+        if (mode === 'month') {
+            const year = parseInt(req.query.nam, 10) || new Date().getFullYear();
+            const month = parseInt(req.query.thang, 10) || (new Date().getMonth() + 1);
+            const lastDay = new Date(year, month, 0).getDate();
+            start = `${year}-${String(month).padStart(2, '0')}-01`;
+            end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        } else if (mode === 'week') {
+            if (req.query.tu_ngay && req.query.den_ngay) {
+                start = req.query.tu_ngay;
+                end = req.query.den_ngay;
+            } else {
+                const parts = (req.query.ngay || new Date().toISOString().slice(0, 10)).split('-').map(Number);
+                const ref = new Date(parts[0], parts[1] - 1, parts[2]);
+                const day = ref.getDay() || 7;
+                const mon = new Date(ref);
+                mon.setDate(ref.getDate() - day + 1);
+                const fri = new Date(mon);
+                fri.setDate(mon.getDate() + 4);
+                const pad = (n) => String(n).padStart(2, '0');
+                start = `${mon.getFullYear()}-${pad(mon.getMonth() + 1)}-${pad(mon.getDate())}`;
+                end = `${fri.getFullYear()}-${pad(fri.getMonth() + 1)}-${pad(fri.getDate())}`;
+            }
+        } else if (req.query.tu_ngay && req.query.den_ngay) {
+            start = req.query.tu_ngay;
+            end = req.query.den_ngay;
+        } else {
+            // Mặc định là 'day'
+            start = req.query.ngay || new Date().toISOString().slice(0, 10);
+            end = start;
+        }
+
+        const where = {
+            ngay: start === end ? start : { [Op.between]: [start, end] }
+        };
+
         if (ca_truc !== undefined && ca_truc !== '' && ca_truc !== 'all') {
             where.ca_truc = parseInt(ca_truc, 10);
         }
 
         const records = await BaoCaoTruc.findAll({
             where,
-            order: [['created_at', 'DESC'], ['id', 'DESC']],
+            order: [['ngay', 'DESC'], ['created_at', 'DESC'], ['id', 'DESC']],
         });
 
-        // Lấy cấu hình hệ thống (để xem mã bảo mật hiện tại)
+        // Lấy cấu hình hệ thống
         const heThong = await CauHinhHeThong.findByPk(1);
 
         // Lấy danh sách tất cả phòng để kiểm tra tiến độ nộp báo cáo
@@ -1577,34 +1804,61 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']],
         });
 
-        const reportedRoomsAn = new Set(records.filter(r => r.ca_truc === 0).map(r => r.ma_phong));
-        const reportedRoomsNgu = new Set(records.filter(r => r.ca_truc === 1).map(r => r.ma_phong));
+        // Chỉ tính phòng chưa nộp nếu start === end (xem theo ngày cụ thể)
+        let phongChuaBaoCaoAn = [];
+        let phongChuaBaoCaoNgu = [];
 
-        const phongChuaBaoCaoAn = allPhong
-            .filter(p => p.loai_phong === 0 && !reportedRoomsAn.has(p.ma_phong))
-            .map(p => p.ma_phong);
+        if (start === end) {
+            const reportedRoomsAn = new Set(records.filter(r => r.ca_truc === 0).map(r => r.ma_phong));
+            const reportedRoomsNgu = new Set(records.filter(r => r.ca_truc === 1).map(r => r.ma_phong));
 
-        const phongChuaBaoCaoNgu = allPhong
-            .filter(p => p.loai_phong === 1 && !reportedRoomsNgu.has(p.ma_phong))
-            .map(p => p.ma_phong);
+            phongChuaBaoCaoAn = allPhong
+                .filter(p => p.loai_phong === 0 && !reportedRoomsAn.has(p.ma_phong))
+                .map(p => p.ma_phong);
 
-        const coViPhamRecords = records.filter(r => (r.danh_sach_vang && r.danh_sach_vang.trim()) || (r.so_hs_vang && r.so_hs_vang > 0));
+            phongChuaBaoCaoNgu = allPhong
+                .filter(p => p.loai_phong === 1 && !reportedRoomsNgu.has(p.ma_phong))
+                .map(p => p.ma_phong);
+        }
+
+        const coViPhamRecords = records.filter(r => r.hs_vi_pham && r.hs_vi_pham.trim());
+        const coVangRecords = records.filter(r => (r.danh_sach_vang && r.danh_sach_vang.trim()) || (r.so_hs_vang && r.so_hs_vang > 0));
+
+        // Thống kê theo GV (tổng ca ăn, ca ngủ của từng GV trong tuần/tháng)
+        const gvSummaryMap = {};
+        records.forEach(r => {
+            const gvName = r.ho_ten_gv || 'Khác';
+            if (!gvSummaryMap[gvName]) {
+                gvSummaryMap[gvName] = { ho_ten: gvName, so_ca_an: 0, so_ca_ngu: 0, tong_ca: 0 };
+            }
+            if (r.ca_truc === 0) gvSummaryMap[gvName].so_ca_an++;
+            else gvSummaryMap[gvName].so_ca_ngu++;
+            gvSummaryMap[gvName].tong_ca++;
+        });
+
         const stats = {
             total: records.length,
             caAnCount: records.filter(r => r.ca_truc === 0).length,
             caNguCount: records.filter(r => r.ca_truc === 1).length,
             coViPhamCount: coViPhamRecords.length,
+            coVangCount: coVangRecords.length,
             totalVang: records.reduce((sum, r) => sum + (r.so_hs_vang || 0), 0),
             totalPhongAn: allPhong.filter(p => p.loai_phong === 0).length,
             totalPhongNgu: allPhong.filter(p => p.loai_phong === 1).length,
+            gvSummary: Object.values(gvSummaryMap).sort((a, b) => b.tong_ca - a.tong_ca),
         };
 
         return res.json({
             ok: true,
-            ngay: ngayFilter,
+            mode: mode || (start === end ? 'day' : 'range'),
+            tu_ngay: start,
+            den_ngay: end,
             records,
             stats,
             ma_bao_mat_hien_tai: heThong?.ma_bao_mat_gv || 'BT789',
+            ten_truong: heThong?.ten_truong || 'LÊ THỊ HỒNG GẤM',
+            nam_hoc: heThong?.nam_hoc || '2026-2027',
+            nguoi_phu_trach: heThong?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
             phongChuaBaoCaoAn,
             phongChuaBaoCaoNgu,
         });
