@@ -1885,4 +1885,36 @@ router.post('/api/baocaotruc/delete/', loginRequired, roleRequired('admin', 'qua
     }
 });
 
+/**
+ * POST /api/baocaotruc/delete-range/
+ * Xóa toàn bộ báo cáo trực theo Ngày / Tuần / Tháng sau khi đã xuất báo cáo
+ */
+router.post('/api/baocaotruc/delete-range/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+    try {
+        const { tu_ngay, den_ngay, thang, nam, ca_truc } = req.body;
+        let where = {};
+        if (thang && nam) {
+            const year = parseInt(nam, 10);
+            const month = parseInt(thang, 10);
+            const lastDay = new Date(year, month, 0).getDate();
+            const start = `${year}-${String(month).padStart(2, '0')}-01`;
+            const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+            where.ngay = { [Op.between]: [start, end] };
+        } else if (tu_ngay && den_ngay) {
+            where.ngay = tu_ngay === den_ngay ? tu_ngay : { [Op.between]: [tu_ngay, den_ngay] };
+        } else {
+            return res.status(400).json({ ok: false, error: 'Thiếu thông tin khoảng thời gian cần xóa' });
+        }
+
+        if (ca_truc !== undefined && ca_truc !== '' && ca_truc !== 'all') {
+            where.ca_truc = parseInt(ca_truc, 10);
+        }
+
+        const count = await BaoCaoTruc.destroy({ where });
+        return res.json({ ok: true, message: `Đã xóa thành công ${count} lượt báo cáo`, count });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 module.exports = router;
