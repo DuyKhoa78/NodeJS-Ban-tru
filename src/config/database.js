@@ -20,7 +20,7 @@ const sequelize = new Sequelize(databaseUrl, {
     idle: 30000,   // Giữ kết nối 30s
     evict: 10000,
   },
-  timezone: '+07:00',
+  timezone: 'Asia/Ho_Chi_Minh',
 });
 
 module.exports = sequelize;

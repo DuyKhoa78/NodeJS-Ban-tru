@@ -18,13 +18,7 @@ const {
 router.use(attachUser);
 
 // ── In-memory cache ──────────────────────────────────────────────────
-// Dữ liệu tĩnh (HS, phòng): TTL 5 phút để đồng bộ kịp thời khi có thay đổi
-const appCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
-
-// Hàm xóa cache liên quan đến dữ liệu HS/phòng (gọi sau khi save/delete)
-function invalidateStaticCaches() {
-    appCache.del(['phong_an', 'phong_ngu', 'hocsinh_full']);
-}
+const { appCache, invalidateStaticCaches } = require('../utils/appCache');
 
 // ── helpers ──────────────────────────────────────────────────────────
 function getMondayOfWeek(dateStr) {
@@ -189,7 +183,9 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
         // Lọc theo loại nếu cần
         const filtered = loai === 'an'
             ? data.filter(hs => hs.phong_an)
-            : data.filter(hs => hs.phong_ngu);
+            : loai === 'ngu'
+            ? data.filter(hs => hs.phong_ngu)
+            : data;
 
         return res.json({ ok: true, hocsinh: filtered });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
@@ -352,6 +348,197 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
             return res.json({ ok: true, message: `Đã lưu ${records.length} bản ghi điểm danh` });
         } catch (e) { await t.rollback(); throw e; }
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** POST /api/diemdanh/bao-phep-truoc/ - Báo vắng phép trước cho HS mà không tự động đổi các bạn khác thành Có mặt */
+router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
+    try {
+        const { ma_hs_list, tu_ngay, den_ngay, ca, ghi_chu } = req.body;
+        if (!ma_hs_list || !Array.isArray(ma_hs_list) || ma_hs_list.length === 0) {
+            return res.status(400).json({ ok: false, error: 'Vui lòng chọn ít nhất 1 học sinh' });
+        }
+        if (!tu_ngay) {
+            return res.status(400).json({ ok: false, error: 'Vui lòng chọn ngày bắt đầu' });
+        }
+        const startDate = tu_ngay;
+        const endDate = den_ngay || tu_ngay;
+        const loaiCa = ca || 'ca_ngay'; // 'an' | 'ngu' | 'ca_ngay'
+
+        // Tạo danh sách các ngày hợp lệ
+        const dates = [];
+        let curr = new Date(startDate + 'T00:00:00');
+        const end = new Date(endDate + 'T00:00:00');
+
+        if (curr > end) {
+            return res.status(400).json({ ok: false, error: 'Ngày bắt đầu không được lớn hơn ngày kết thúc' });
+        }
+
+        while (curr <= end) {
+            const dow = curr.getDay(); // 0 = CN, 6 = T7
+            if (dow !== 0 && dow !== 6) {
+                const yyyy = curr.getFullYear();
+                const mm = String(curr.getMonth() + 1).padStart(2, '0');
+                const dd = String(curr.getDate()).padStart(2, '0');
+                dates.push(`${yyyy}-${mm}-${dd}`);
+            }
+            curr.setDate(curr.getDate() + 1);
+        }
+
+        if (dates.length === 0) {
+            return res.status(400).json({ ok: false, error: 'Khoảng thời gian đã chọn rơi vào cuối tuần, không có ngày học bán trú' });
+        }
+
+        const t = await sequelize.transaction();
+        try {
+            const existingRecords = await DiemDanhHS.findAll({
+                where: {
+                    ma_hs_id: { [Op.in]: ma_hs_list },
+                    ngay: { [Op.in]: dates },
+                },
+                transaction: t,
+            });
+
+            const recordMap = new Map();
+            existingRecords.forEach(r => {
+                recordMap.set(`${r.ma_hs_id}_${r.ngay}`, r);
+            });
+
+            let count = 0;
+            for (const ma_hs of ma_hs_list) {
+                for (const d of dates) {
+                    const key = `${ma_hs}_${d}`;
+                    const rec = recordMap.get(key);
+
+                    if (rec) {
+                        const updates = {};
+                        if (loaiCa === 'an' || loaiCa === 'ca_ngay') {
+                            updates.diem_danh_an = 2; // 2 = Phép
+                        }
+                        if (loaiCa === 'ngu' || loaiCa === 'ca_ngay') {
+                            updates.diem_danh_ngu = 2; // 2 = Phép
+                        }
+                        if (ghi_chu && ghi_chu.trim()) {
+                            updates.ghi_chu = ghi_chu.trim();
+                        }
+                        await rec.update(updates, { transaction: t });
+                    } else {
+                        const newRow = {
+                            ma_hs_id: ma_hs,
+                            ngay: d,
+                            diem_danh_an: (loaiCa === 'an' || loaiCa === 'ca_ngay') ? 2 : null,
+                            diem_danh_ngu: (loaiCa === 'ngu' || loaiCa === 'ca_ngay') ? 2 : null,
+                            ghi_chu: ghi_chu && ghi_chu.trim() ? ghi_chu.trim() : null,
+                        };
+                        await DiemDanhHS.create(newRow, { transaction: t });
+                    }
+                    count++;
+                }
+            }
+
+            await t.commit();
+            return res.json({
+                ok: true,
+                message: `Đã ghi nhận vắng phép thành công cho ${ma_hs_list.length} học sinh (${dates.length} ngày)`,
+                totalUpdated: count,
+                dates,
+            });
+        } catch (e) {
+            await t.rollback();
+            throw e;
+        }
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/diemdanh/huy-phep/ - Hủy báo vắng phép cho HS */
+router.post('/api/diemdanh/huy-phep/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
+    try {
+        const { ma_hs_id, ngay, ca } = req.body;
+        if (!ma_hs_id || !ngay) {
+            return res.status(400).json({ ok: false, error: 'Thiếu thông tin học sinh hoặc ngày' });
+        }
+        const loaiCa = ca || 'ca_ngay'; // 'an' | 'ngu' | 'ca_ngay'
+        const rec = await DiemDanhHS.findOne({ where: { ma_hs_id, ngay } });
+        if (!rec) {
+            return res.json({ ok: true, message: 'Không tìm thấy dữ liệu điểm danh cần hủy' });
+        }
+
+        const updates = {};
+        if (loaiCa === 'an' || loaiCa === 'ca_ngay') {
+            updates.diem_danh_an = null;
+        }
+        if (loaiCa === 'ngu' || loaiCa === 'ca_ngay') {
+            updates.diem_danh_ngu = null;
+        }
+
+        const finalAn = updates.diem_danh_an !== undefined ? updates.diem_danh_an : rec.diem_danh_an;
+        const finalNgu = updates.diem_danh_ngu !== undefined ? updates.diem_danh_ngu : rec.diem_danh_ngu;
+
+        if (finalAn === null && finalNgu === null) {
+            await rec.destroy();
+        } else {
+            await rec.update(updates);
+        }
+
+        return res.json({ ok: true, message: 'Đã hủy vắng phép thành công' });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** GET /api/diemdanh/danh-sach-phep/ - Danh sách học sinh đã báo phép trong ngày/khoảng ngày */
+router.get('/api/diemdanh/danh-sach-phep/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
+    try {
+        const { ngay, tu, den } = req.query;
+        let whereCondition = {};
+        if (tu && den) {
+            whereCondition.ngay = { [Op.between]: [tu, den] };
+        } else if (ngay) {
+            whereCondition.ngay = ngay;
+        } else {
+            whereCondition.ngay = new Date().toISOString().split('T')[0];
+        }
+
+        whereCondition[Op.or] = [
+            { diem_danh_an: 2 },
+            { diem_danh_ngu: 2 }
+        ];
+
+        const records = await DiemDanhHS.findAll({
+            where: whereCondition,
+            include: [{
+                association: 'hoc_sinh',
+                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id'],
+                include: [
+                    { association: 'phong_an', attributes: ['ma_phong'] },
+                    { association: 'phong_ngu', attributes: ['ma_phong'] },
+                ]
+            }],
+            order: [['ngay', 'DESC'], ['ma_hs_id', 'ASC']],
+        });
+
+        const list = records.map(r => ({
+            id: r.id,
+            ma_hs_id: r.ma_hs_id,
+            ngay: r.ngay,
+            diem_danh_an: r.diem_danh_an,
+            diem_danh_ngu: r.diem_danh_ngu,
+            ghi_chu: r.ghi_chu,
+            hoc_sinh: r.hoc_sinh ? {
+                id: r.hoc_sinh.id,
+                ho_ten: r.hoc_sinh.ho_ten,
+                lop: r.hoc_sinh.lop,
+                gioi_tinh: r.hoc_sinh.gioi_tinh,
+                phong_an: r.hoc_sinh.phong_an?.ma_phong || null,
+                phong_ngu: r.hoc_sinh.phong_ngu?.ma_phong || null,
+            } : null,
+        }));
+
+        return res.json({ ok: true, list });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 // ══════════════════════════════════════════════
@@ -1464,34 +1651,51 @@ function parseVNSubmissionDate(input) {
         };
     }
     const str = String(input).trim();
-    // Khớp dạng DD/MM/YYYY hoặc DD/MM/YYYY HH:mm:ss
-    const dmyMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (!str) return { ngay: getVietnamTodayYMD(), submittedAt: new Date() };
+
+    const pad = (n) => String(n).padStart(2, '0');
+
+    // 1. Khớp dạng DD/MM/YYYY hoặc DD/MM/YYYY HH:mm:ss hoặc D/M/YYYY H:m:s
+    const dmyMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
     if (dmyMatch) {
         const [, d, m, y, h, min, s] = dmyMatch;
-        const pad = (n) => String(n).padStart(2, '0');
         const ngay = `${y}-${pad(m)}-${pad(d)}`;
-        const hour = h !== undefined ? parseInt(h, 10) : 12;
-        const minute = min !== undefined ? parseInt(min, 10) : 0;
-        const second = s !== undefined ? parseInt(s, 10) : 0;
-        const isoString = `${ngay}T${pad(hour)}:${pad(minute)}:${pad(second)}+07:00`;
+        const hour = h !== undefined ? pad(h) : '12';
+        const minute = min !== undefined ? pad(min) : '00';
+        const second = s !== undefined ? pad(s) : '00';
+        const isoString = `${ngay}T${hour}:${minute}:${second}+07:00`;
         const submittedAt = new Date(isoString);
         return {
             ngay,
             submittedAt: !isNaN(submittedAt.getTime()) ? submittedAt : new Date()
         };
     }
-    // Khớp dạng YYYY-MM-DD
-    const ymdMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+
+    // 2. Khớp dạng YYYY-MM-DD HH:mm:ss hoặc YYYY-MM-DDTHH:mm:ss (có hoặc không có timezone)
+    const ymdMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/i);
     if (ymdMatch) {
-        const [, y, m, d] = ymdMatch;
-        const pad = (n) => String(n).padStart(2, '0');
+        const [, y, m, d, h, min, s, tz] = ymdMatch;
         const ngay = `${y}-${pad(m)}-${pad(d)}`;
-        const parsed = new Date(str);
+        // Nếu đã có múi giờ tường minh (Z hoặc +07:00)
+        if (tz) {
+            const parsed = new Date(str);
+            if (!isNaN(parsed.getTime())) {
+                const vnNgay = parsed.toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });
+                return { ngay: vnNgay, submittedAt: parsed };
+            }
+        }
+        // Nếu không có múi giờ tường minh (giờ VN cục bộ do Google Form/Sheets gửi) -> Luôn gắn +07:00
+        const hour = h !== undefined ? pad(h) : '12';
+        const minute = min !== undefined ? pad(min) : '00';
+        const second = s !== undefined ? pad(s) : '00';
+        const isoString = `${ngay}T${hour}:${minute}:${second}+07:00`;
+        const submittedAt = new Date(isoString);
         return {
             ngay,
-            submittedAt: !isNaN(parsed.getTime()) ? parsed : new Date()
+            submittedAt: !isNaN(submittedAt.getTime()) ? submittedAt : new Date()
         };
     }
+
     const parsed = new Date(str);
     if (!isNaN(parsed.getTime())) {
         return {
@@ -1538,25 +1742,43 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
                 : (Array.isArray(req.body?.row) ? req.body.row : null));
 
         if (rawArray && rawArray.length >= 4) {
-            // Thứ tự cột theo Sheet của User:
+            // Thứ tự cột theo Sheet mới của User (13 cột):
             // 0: Dấu thời gian | 1: Ca trực
-            // Ca ăn: 2: Họ và tên giáo viên | 3: Phòng ăn | 4: Tình hình chung | 5: Ghi nhận HS vi phạm nền nếp | 6: Ghi chú/Góp ý
-            // Ca ngủ: 7: Họ và tên | 8: Phòng ngủ | 9: Tình hình chung | 10: Ghi nhận HS vi phạm nề nếp | 11: Ghi chú/Góp ý
+            // Ca ăn: 2: Họ và tên giáo viên | 3: Phòng ăn | 4: Tình hình chung | 5: Sỉ số | 6: Ghi chú/Góp ý
+            // Ca ngủ: 7: Họ và tên | 8: Phòng ngủ | 9: Sỉ số | 10: Tình hình chung | 11: Ghi nhận HS vi phạm nề nếp (Nếu có) | 12: Ghi chú/Góp ý
             const rawCa = rawArray[1] || '';
             const isCaNgu = String(rawCa).toLowerCase().includes('ngủ') ||
                             String(rawCa).toLowerCase().includes('nghi') ||
                             (Boolean(rawArray[8]) && !rawArray[3]);
 
-            bodyObj = {
-                timestamp: rawArray[0],
-                ca_truc: isCaNgu ? 'Trực ngủ' : 'Trực ăn',
-                ho_ten_gv: isCaNgu ? (rawArray[7] || '') : (rawArray[2] || ''),
-                ma_phong: isCaNgu ? (rawArray[8] || '') : (rawArray[3] || ''),
-                tinh_hinh: isCaNgu ? (rawArray[9] || 'Tốt') : (rawArray[4] || 'Tốt'),
-                hs_vi_pham: isCaNgu ? (rawArray[10] || '') : (rawArray[5] || ''),
-                ghi_chu: isCaNgu ? (rawArray[11] || '') : (rawArray[6] || ''),
-                nguon: 'google_sheet_row'
-            };
+            const isNew13ColSheet = rawArray.length >= 13 ||
+                (!isNaN(parseInt(rawArray[5], 10)) && String(rawArray[5]).trim() !== '') ||
+                (Boolean(rawArray[9]) && !isNaN(parseInt(rawArray[9], 10)));
+
+            if (isNew13ColSheet) {
+                bodyObj = {
+                    timestamp: rawArray[0],
+                    ca_truc: isCaNgu ? 'Trực ngủ' : 'Trực ăn',
+                    ho_ten_gv: isCaNgu ? (rawArray[7] || '') : (rawArray[2] || ''),
+                    ma_phong: isCaNgu ? (rawArray[8] || '') : (rawArray[3] || ''),
+                    si_so: isCaNgu ? (rawArray[9] || '') : (rawArray[5] || ''),
+                    tinh_hinh: isCaNgu ? (rawArray[10] || 'Tốt') : (rawArray[4] || 'Tốt'),
+                    hs_vi_pham: isCaNgu ? (rawArray[11] || '') : '',
+                    ghi_chu: isCaNgu ? (rawArray[12] || '') : (rawArray[6] || ''),
+                    nguon: 'google_sheet_row'
+                };
+            } else {
+                bodyObj = {
+                    timestamp: rawArray[0],
+                    ca_truc: isCaNgu ? 'Trực ngủ' : 'Trực ăn',
+                    ho_ten_gv: isCaNgu ? (rawArray[7] || '') : (rawArray[2] || ''),
+                    ma_phong: isCaNgu ? (rawArray[8] || '') : (rawArray[3] || ''),
+                    tinh_hinh: isCaNgu ? (rawArray[9] || 'Tốt') : (rawArray[4] || 'Tốt'),
+                    hs_vi_pham: isCaNgu ? (rawArray[10] || '') : (rawArray[5] || ''),
+                    ghi_chu: isCaNgu ? (rawArray[11] || '') : (rawArray[6] || ''),
+                    nguon: 'google_sheet_row'
+                };
+            }
         }
 
         // 2. Trích xuất Ca trực
@@ -1650,12 +1872,56 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             bodyObj['Tình hình']
         ) || 'Bình thường';
 
-        // 6. Trích xuất Ghi nhận HS vi phạm (hỗ trợ cả nền nếp và nề nếp)
+        // 6. Trích xuất Sỉ số phòng (hỗ trợ nhiều mẫu câu hỏi trên Google Form)
+        let si_so_raw = pickFirstNonEmpty(
+            bodyObj.si_so,
+            bodyObj['Sỉ số'],
+            bodyObj['Sĩ số'],
+            bodyObj['sỉ số'],
+            bodyObj['sĩ số'],
+            bodyObj['4. Sỉ số'],
+            bodyObj['3. Sỉ số'],
+            bodyObj['4. Sĩ số'],
+            bodyObj['3. Sĩ số'],
+            bodyObj['Số lượng'],
+            bodyObj['Sĩ số phòng'],
+            bodyObj['Sỉ số phòng'],
+            bodyObj['Số lượng học sinh'],
+            bodyObj['Sĩ số có mặt']
+        );
+        if (!si_so_raw && typeof bodyObj === 'object') {
+            const siSoKey = Object.keys(bodyObj).find(k => {
+                const lk = k.toLowerCase();
+                return lk.includes('sỉ') || lk.includes('sĩ') || lk.includes('si_so');
+            });
+            if (siSoKey) si_so_raw = bodyObj[siSoKey];
+        }
+
+        // Tự động tính Sĩ số theo số học sinh được phân vào phòng nếu form bỏ trống
+        if (!si_so_raw && ma_phong_raw) {
+            try {
+                const parts = String(ma_phong_raw).split(/[,;\-\/]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+                const colField = caChuan === 1 ? 'ma_phong_ngu_id' : 'ma_phong_an_id';
+                const countHs = await HocSinh.count({ where: { [colField]: parts } });
+                if (countHs > 0) {
+                    si_so_raw = String(countHs);
+                } else {
+                    const pMatch = await Phong.findOne({ where: { ma_phong: parts[0], loai_phong: caChuan } });
+                    if (pMatch && pMatch.suc_chua) si_so_raw = String(pMatch.suc_chua);
+                }
+            } catch (errCount) {
+                console.warn('Lỗi tự động tính sĩ số phòng webhook:', errCount.message);
+            }
+        }
+
+        // 7. Trích xuất Ghi nhận HS vi phạm (hỗ trợ cả nề nếp và nền nếp, có (Nếu có))
         const viPhamContent = pickFirstNonEmpty(
             bodyObj.hs_vi_pham,
             bodyObj.hs_bat_thuong,
-            bodyObj['Ghi nhận HS vi phạm nền nếp'],
+            bodyObj['Ghi nhận HS vi phạm nề nếp (Nếu có)'],
             bodyObj['Ghi nhận HS vi phạm nề nếp'],
+            bodyObj['Ghi nhận HS vi phạm nền nếp'],
+            bodyObj['Ghi nhận HS vi phạm nền nếp (Nếu có)'],
             bodyObj['Học sinh bất thường / Quậy phá / Sự cố (nếu có)'],
             bodyObj['4. Học sinh bất thường / Quậy phá / Sự cố (nếu có)'],
             bodyObj['Học sinh vi phạm'],
@@ -1665,7 +1931,7 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             bodyObj.danh_sach_quay_pha
         );
 
-        // 7. Trích xuất Ghi chú / Góp ý / Đề xuất CSVC
+        // 8. Trích xuất Ghi chú / Góp ý / Đề xuất CSVC
         const ghiChuContent = pickFirstNonEmpty(
             bodyObj.ghi_chu,
             bodyObj['Ghi chú/Góp ý'],
@@ -1676,7 +1942,7 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             bodyObj['Ghi chú / Đề xuất cơ sở vật chất']
         );
 
-        // 8. Trích xuất Ngày & Giờ nộp (Dấu thời gian)
+        // 9. Trích xuất Ngày & Giờ nộp (Dấu thời gian)
         const timeInput = pickFirstNonEmpty(
             bodyObj.thoi_gian_nop,
             bodyObj.timestamp,
@@ -1711,6 +1977,7 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             ma_xac_thuc: maNhap || null,
             sdt_xac_nhan: bodyObj.sdt_xac_nhan ? String(bodyObj.sdt_xac_nhan).trim() : null,
             is_hop_le: isHopLe,
+            si_so: si_so_raw ? String(si_so_raw).trim() : null,
             so_hs_vang: Math.max(0, vangNum),
             danh_sach_vang: String(bodyObj.danh_sach_vang || '').trim(),
             hs_vi_pham: viPhamContent,
@@ -1730,6 +1997,7 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
                 ca_truc: record.ca_truc === 0 ? 'Ăn trưa' : 'Nghỉ trưa',
                 ma_phong: record.ma_phong,
                 ho_ten_gv: record.ho_ten_gv,
+                si_so: record.si_so,
                 tinh_hinh: record.tinh_hinh,
                 hs_vi_pham: record.hs_vi_pham,
                 ghi_chu: record.ghi_chu,
@@ -1762,7 +2030,7 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
                 start = req.query.tu_ngay;
                 end = req.query.den_ngay;
             } else {
-                const parts = (req.query.ngay || new Date().toISOString().slice(0, 10)).split('-').map(Number);
+                const parts = (req.query.ngay || getVietnamTodayYMD()).split('-').map(Number);
                 const ref = new Date(parts[0], parts[1] - 1, parts[2]);
                 const day = ref.getDay() || 7;
                 const mon = new Date(ref);
@@ -1778,7 +2046,7 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             end = req.query.den_ngay;
         } else {
             // Mặc định là 'day'
-            start = req.query.ngay || new Date().toISOString().slice(0, 10);
+            start = req.query.ngay || getVietnamTodayYMD();
             end = start;
         }
 
@@ -1802,6 +2070,52 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
         const allPhong = await Phong.findAll({
             attributes: ['ma_phong', 'loai_phong', 'suc_chua'],
             order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']],
+        });
+
+        // Tính số lượng học sinh thực tế từng phòng để tự động điền Sĩ số nếu form thiếu
+        const allHocSinh = await HocSinh.findAll({
+            attributes: ['ma_phong_an_id', 'ma_phong_ngu_id'],
+            raw: true,
+        });
+        const hsCountsAn = {};
+        const hsCountsNgu = {};
+        allHocSinh.forEach(h => {
+            if (h.ma_phong_an_id) hsCountsAn[h.ma_phong_an_id] = (hsCountsAn[h.ma_phong_an_id] || 0) + 1;
+            if (h.ma_phong_ngu_id) hsCountsNgu[h.ma_phong_ngu_id] = (hsCountsNgu[h.ma_phong_ngu_id] || 0) + 1;
+        });
+
+        const pCapMap = {};
+        allPhong.forEach(p => {
+            pCapMap[`${p.loai_phong}_${p.ma_phong.toUpperCase()}`] = p.suc_chua;
+        });
+
+        const getRoomStudentCount = (ma_phong, ca_truc) => {
+            if (!ma_phong) return null;
+            const caNum = Number(ca_truc) === 1 ? 1 : 0;
+            const countsMap = (caNum === 0) ? hsCountsAn : hsCountsNgu;
+            const parts = String(ma_phong).split(/[,;\-\/]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+            if (parts.length === 0) return null;
+
+            let totalCount = 0;
+            let totalCap = 0;
+            for (const part of parts) {
+                if (countsMap[part] !== undefined) {
+                    totalCount += countsMap[part];
+                }
+                const cap = pCapMap[`${caNum}_${part}`];
+                if (cap) totalCap += cap;
+            }
+            if (totalCount > 0) return String(totalCount);
+            if (totalCap > 0) return String(totalCap);
+            return null;
+        };
+
+        const recordsWithSiSo = records.map(r => {
+            const plain = r.toJSON ? r.toJSON() : { ...r };
+            if (!plain.si_so || String(plain.si_so).trim() === '') {
+                plain.si_so = getRoomStudentCount(plain.ma_phong, plain.ca_truc);
+            }
+            return plain;
         });
 
         // Chỉ tính phòng chưa nộp nếu start === end (xem theo ngày cụ thể)
@@ -1853,7 +2167,7 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             mode: mode || (start === end ? 'day' : 'range'),
             tu_ngay: start,
             den_ngay: end,
-            records,
+            records: recordsWithSiSo,
             stats,
             ma_bao_mat_hien_tai: heThong?.ma_bao_mat_gv || 'BT789',
             ten_truong: heThong?.ten_truong || 'LÊ THỊ HỒNG GẤM',

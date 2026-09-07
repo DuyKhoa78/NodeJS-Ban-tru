@@ -10,6 +10,7 @@ const {
   CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize, LichSuThaoTac
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
+const { invalidateStaticCaches } = require('../utils/appCache');
 
 router.use(attachUser);
 const upload = multer({ storage: multer.memoryStorage() });
@@ -131,6 +132,7 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
 
     if (id) {
       await HocSinh.update(data, { where: { id } });
+      invalidateStaticCaches();
       return res.json({ ok: true, message: 'Cập nhật học sinh thành công' });
     } else {
       let hs;
@@ -146,6 +148,7 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
           throw insertErr;
         }
       }
+      invalidateStaticCaches();
       return res.json({ ok: true, message: 'Thêm học sinh thành công', id: hs.id });
     }
   } catch (err) {
@@ -159,6 +162,7 @@ router.post('/api/hocsinh/:pk/delete/', loginRequired, roleRequired('admin'), as
     const hs = await HocSinh.findByPk(req.params.pk);
     if (!hs) return res.status(404).json({ ok: false, error: 'Không tìm thấy học sinh' });
     await hs.destroy();
+    invalidateStaticCaches();
     return res.json({ ok: true, message: 'Đã xóa học sinh' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -331,6 +335,7 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
       console.error('Lỗi sync sequence sau khi import CSV:', seqErr);
     }
 
+    invalidateStaticCaches();
     return res.json({ ok: true, total: rows.length, success, errors });
   } catch (err) {
     return res.status(500).json({ ok: false, error: `Lỗi xử lý file CSV: ${err.message}` });
@@ -830,10 +835,12 @@ router.post('/api/phong/save/', loginRequired, roleRequired('admin'), async (req
     if (is_edit) {
       if (!phong) return res.status(404).json({ ok: false, error: 'Không tìm thấy phòng để cập nhật' });
       await phong.update({ loai_phong: loai, suc_chua: parseInt(suc_chua), gioi_tinh: gt, sl_diem_danh: sl_diem_danh || 1, sl_ho_tro: sl_ho_tro || 1 });
+      invalidateStaticCaches();
       return res.json({ ok: true, message: 'Cập nhật phòng thành công' });
     } else {
       if (phong) return res.status(400).json({ ok: false, error: 'Mã phòng này đã tồn tại trong hệ thống!' });
       await Phong.create({ ma_phong: maPhong, loai_phong: loai, suc_chua: parseInt(suc_chua), gioi_tinh: gt, sl_diem_danh: sl_diem_danh || 1, sl_ho_tro: sl_ho_tro || 1 });
+      invalidateStaticCaches();
       return res.json({ ok: true, message: 'Thêm phòng thành công' });
     }
   } catch (err) {
@@ -848,6 +855,7 @@ router.post('/api/phong/delete/', loginRequired, roleRequired('admin'), async (r
     const phong = await Phong.findByPk(ma_phong);
     if (!phong) return res.status(404).json({ ok: false, error: 'Không tìm thấy phòng' });
     await phong.destroy();
+    invalidateStaticCaches();
     return res.json({ ok: true, message: 'Đã xóa phòng' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

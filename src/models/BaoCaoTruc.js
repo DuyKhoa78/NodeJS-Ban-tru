@@ -52,6 +52,11 @@ const BaoCaoTruc = sequelize.define('BaoCaoTruc', {
     allowNull: true,
     comment: 'Chi tiết HS vắng (tên, lớp)',
   },
+  si_so: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    comment: 'Sĩ số học sinh tại phòng',
+  },
   hs_vi_pham: {
     type: DataTypes.TEXT,
     allowNull: true,

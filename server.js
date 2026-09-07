@@ -5,7 +5,7 @@ const session = require('express-session');
 const morgan = require('morgan');
 const path = require('path');
 
-const { sequelize, CauHinhNgay, LichSuThaoTac } = require('./src/models');
+const { sequelize, CauHinhNgay, LichSuThaoTac, BaoCaoTruc } = require('./src/models');
 const sessionConfig = require('./src/config/session');
 const errorHandler = require('./src/middleware/errorHandler');
 
@@ -119,7 +119,8 @@ async function startServer() {
     // Tự động thêm cột mới nếu thiếu (không xóa dữ liệu)
     await CauHinhNgay.sync({ alter: true });
     await LichSuThaoTac.sync({ alter: true });
-    console.log('✅ Bảng core_cauhinh_ngay & core_lichsuthaotac sẵn sàng!');
+    await BaoCaoTruc.sync({ alter: true });
+    console.log('✅ Bảng core_cauhinh_ngay, core_lichsuthaotac & nghiepvu_baocaotruc sẵn sàng!');
     // Tự động đồng bộ sequence ID tránh xung đột primary key
     await sequelize.query(`
       SELECT setval('quanli_hocsinh_id_seq', COALESCE((SELECT MAX(id) FROM quanli_hocsinh), 1), true);
