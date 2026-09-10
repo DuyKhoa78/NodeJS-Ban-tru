@@ -19,6 +19,66 @@ router.get('/api/health', (req, res) => {
 });
 
 /**
+ * GET /api/the-ban-tru/danh-sach
+ * Trả danh sách toàn bộ học sinh để in thẻ bán trú
+ * Hỗ trợ lọc theo lop hoặc khoi (ví dụ: ?lop=10A1 hoặc ?khoi=10)
+ */
+router.get('/api/the-ban-tru/danh-sach', async (req, res) => {
+  try {
+    const { lop, khoi, id } = req.query;
+    const where = { dang_hoc: true };
+    if (id) {
+      let cleanId = id;
+      if (String(id).startsWith('26') && String(id).length === 5) {
+        cleanId = parseInt(String(id).slice(2), 10);
+      }
+      where.id = cleanId;
+    } else if (lop && lop !== 'all') {
+      where.lop = lop;
+    } else if (khoi && khoi !== 'all') {
+      where.lop = { [Op.like]: `${khoi}%` };
+    }
+
+    const list = await HocSinh.findAll({
+      where,
+      attributes: ['id', 'ho_ten', 'gioi_tinh', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'],
+      order: [['id', 'ASC']],
+    });
+
+    const classes = await HocSinh.findAll({
+      attributes: ['lop'],
+      where: { dang_hoc: true },
+      group: ['lop'],
+      order: [['lop', 'ASC']],
+    });
+
+    const [ch] = await CauHinhHeThong.findOrCreate({
+      where: { id: 1 },
+      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' },
+    });
+
+    return res.json({
+      ok: true,
+      nam_hoc: ch.nam_hoc || '2026-2027',
+      total: list.length,
+      classes: classes.map((c) => c.lop),
+      students: list.map((h) => ({
+        id: `26${String(h.id).padStart(3, '0')}`,
+        raw_id: h.id,
+        name: (h.ho_ten || '').trim().toUpperCase(),
+        lop: (h.lop || '').trim(),
+        gt: h.gioi_tinh, // 0 = Nam, 1 = Nữ
+        an: h.ma_phong_an_id || 'Chưa xếp',
+        ngu: h.ma_phong_ngu_id || 'Chưa xếp',
+        photo: '/user.jpg',
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/dashboard/
  * Trả thống kê cho Dashboard
  */

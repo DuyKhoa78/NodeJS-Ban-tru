@@ -248,7 +248,7 @@ function generatePdfHtml(partName, rangeDesc, students, namHoc, nguoiPhuTrach, o
       .summary-line { font-size: 9.2pt; margin-bottom: 6px; }
       .sig-wrap {
         display: flex;
-        justify-content: flex-end;
+        justify-content: space-between;
         margin-top: 8px;
         page-break-inside: avoid;
       }
@@ -303,11 +303,16 @@ function generatePdfHtml(partName, rangeDesc, students, namHoc, nguoiPhuTrach, o
 
     <div class="sig-wrap">
       <div class="sig-col">
-        <div class="sig-date">${todayStr}</div>
-        <div class="sig-role">PHỤ TRÁCH BÁN TRÚ</div>
+        <div class="sig-role" style="margin-top: 16px;">NGƯỜI LẬP BẢNG</div>
         <div class="sig-hint">(Ký và ghi rõ họ tên)</div>
         <div class="sig-space"></div>
-        <div class="sig-role">${nguoiPhuTrach}</div>
+      </div>
+      <div class="sig-col">
+        <div class="sig-date">${todayStr}</div>
+        <div class="sig-role">GIÁM ĐỐC</div>
+        <div class="sig-hint">(Ký và ghi rõ họ tên)</div>
+        <div class="sig-space"></div>
+        <div class="sig-name" style="font-weight: bold;">${nguoiPhuTrach}</div>
       </div>
     </div>
   </body>

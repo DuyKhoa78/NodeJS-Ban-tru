@@ -24,6 +24,16 @@ const HocSinh = sequelize.define('HocSinh', {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
   },
+  ngay_vao: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    comment: 'Ngày bắt đầu vào bán trú',
+  },
+  ngay_rut: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    comment: 'Ngày rút bán trú',
+  },
   ghi_chu: {
     type: DataTypes.TEXT,
     allowNull: true,

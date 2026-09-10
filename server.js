@@ -120,6 +120,10 @@ async function startServer() {
     await CauHinhNgay.sync({ alter: true });
     await LichSuThaoTac.sync({ alter: true });
     await BaoCaoTruc.sync({ alter: true });
+    await sequelize.query(`
+      ALTER TABLE "quanli_hocsinh" ADD COLUMN IF NOT EXISTS "ngay_vao" DATE;
+      ALTER TABLE "quanli_hocsinh" ADD COLUMN IF NOT EXISTS "ngay_rut" DATE;
+    `).catch(() => {});
     console.log('✅ Bảng core_cauhinh_ngay, core_lichsuthaotac & nghiepvu_baocaotruc sẵn sàng!');
     // Tự động đồng bộ sequence ID tránh xung đột primary key
     await sequelize.query(`

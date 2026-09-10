@@ -157,13 +157,12 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
         let data = appCache.get(cacheKey);
         if (!data) {
             const list = await HocSinh.findAll({
-                where: { dang_hoc: true },
-                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id'],
+                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id', 'dang_hoc', 'ngay_vao', 'ngay_rut'],
                 include: [
                     { association: 'phong_an', attributes: ['ma_phong'] },
                     { association: 'phong_ngu', attributes: ['ma_phong', 'gioi_tinh'] },
                 ],
-                order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+                order: [['id', 'ASC']],
             });
             data = list.map(hs => ({
                 id: hs.id,
@@ -171,6 +170,9 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
                 lop: hs.lop,
                 khoi: parseInt(hs.lop.slice(0, 2)),
                 gioi_tinh: hs.gioi_tinh,
+                dang_hoc: hs.dang_hoc,
+                ngay_vao: hs.ngay_vao,
+                ngay_rut: hs.ngay_rut,
                 phong_an: hs.phong_an?.ma_phong || null,
                 phong_ngu: hs.phong_ngu?.ma_phong || null,
             }));
@@ -181,11 +183,17 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
         }
 
         // Lọc theo loại nếu cần
-        const filtered = loai === 'an'
+        let filtered = loai === 'an'
             ? data.filter(hs => hs.phong_an)
             : loai === 'ngu'
             ? data.filter(hs => hs.phong_ngu)
             : data;
+
+        // Nếu có truyền ngày cụ thể thì lọc các HS có hiệu lực tại ngày đó
+        if (req.query.ngay) {
+            const d = req.query.ngay;
+            filtered = filtered.filter(hs => (!hs.ngay_vao || hs.ngay_vao <= d) && (!hs.ngay_rut || hs.ngay_rut >= d));
+        }
 
         return res.json({ ok: true, hocsinh: filtered });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
@@ -1183,9 +1191,24 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
         // 2. Lấy danh sách phòng ăn
         const phongList = await Phong.findAll({ where: { loai_phong: 0 }, order: [['ma_phong', 'ASC']] });
 
-        // 3. Lấy danh sách học sinh kèm phòng ăn
+        // 3. Lấy danh sách học sinh kèm phòng ăn (đang học HOẶC rút từ trong/sau tháng này)
         const hsList = await HocSinh.findAll({
-            where: { dang_hoc: true },
+            where: {
+                [Op.and]: [
+                    {
+                        [Op.or]: [
+                            { dang_hoc: true },
+                            { ngay_rut: { [Op.gte]: start } },
+                        ]
+                    },
+                    {
+                        [Op.or]: [
+                            { ngay_vao: null },
+                            { ngay_vao: { [Op.lte]: end } },
+                        ]
+                    }
+                ]
+            },
             include: [{ association: 'phong_an', attributes: ['ma_phong'] }],
             order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
         });
@@ -1236,6 +1259,8 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
                 lop: hs.lop,
                 gioi_tinh: hs.gioi_tinh,
                 phong_an: maPhong,
+                ngay_vao: hs.ngay_vao,
+                ngay_rut: hs.ngay_rut,
                 diemdanh,
                 so_ngay_co_mat: Object.values(diemdanh).filter(v => v === 0).length,
                 so_ngay_vang: Object.values(diemdanh).filter(v => v === 1).length,
@@ -1287,9 +1312,24 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
         // 2. Danh sách phòng ngủ
         const phongList = await Phong.findAll({ where: { loai_phong: 1 }, order: [['ma_phong', 'ASC']] });
 
-        // 3. Học sinh kèm phòng ngủ
+        // 3. Học sinh kèm phòng ngủ (đang học HOẶC rút từ trong/sau tháng này)
         const hsList = await HocSinh.findAll({
-            where: { dang_hoc: true },
+            where: {
+                [Op.and]: [
+                    {
+                        [Op.or]: [
+                            { dang_hoc: true },
+                            { ngay_rut: { [Op.gte]: start } },
+                        ]
+                    },
+                    {
+                        [Op.or]: [
+                            { ngay_vao: null },
+                            { ngay_vao: { [Op.lte]: end } },
+                        ]
+                    }
+                ]
+            },
             include: [{ association: 'phong_ngu', attributes: ['ma_phong', 'gioi_tinh'] }],
             order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
         });
@@ -1330,7 +1370,10 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
             const hasAny = Object.values(diemdanh).some(v => v !== null);
             dataByPhong[maPhong].push({
                 id: hs.id, ho_ten: hs.ho_ten, lop: hs.lop, gioi_tinh: hs.gioi_tinh,
-                phong_ngu: maPhong, diemdanh,
+                phong_ngu: maPhong,
+                ngay_vao: hs.ngay_vao,
+                ngay_rut: hs.ngay_rut,
+                diemdanh,
                 so_ngay_co_mat: Object.values(diemdanh).filter(v => v === 0).length,
                 so_ngay_vang: Object.values(diemdanh).filter(v => v === 1).length,
                 so_ngay_phep: Object.values(diemdanh).filter(v => v === 2).length,
@@ -1359,9 +1402,10 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
-/** GET /api/baocao/tong-hop-lop/?thang=MM&nam=YYYY&lop=
- *  Xuất tổng hợp số buổi ăn/ngủ thực tế, vắng, phép từng HS theo lớp.
- *  Dùng để gửi GVCN và thu tiền HS.
+/**
+ * GET /api/baocao/tong-hop-lop/?thang=MM&nam=YYYY&lop=10A1
+ * Tổng hợp chuyên cần và tính tiền ăn/ngủ theo từng HS, gom theo lớp
+ * Lấy cả học sinh rút bán trú trong tháng để tính tiền chính xác
  */
 router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
     try {
@@ -1387,12 +1431,27 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
         const ngayAn = pcAn.map(r => r.ngay).sort();
         const ngayNgu = pcNgu.map(r => r.ngay).sort();
 
-        // 2. Danh sách HS
-        const hsWhere = { dang_hoc: true };
+        // 2. Danh sách HS (đang học HOẶC rút từ trong/sau tháng này, và vào trước/trong tháng này)
+        const hsWhere = {
+            [Op.and]: [
+                {
+                    [Op.or]: [
+                        { dang_hoc: true },
+                        { ngay_rut: { [Op.gte]: start } },
+                    ]
+                },
+                {
+                    [Op.or]: [
+                        { ngay_vao: null },
+                        { ngay_vao: { [Op.lte]: end } },
+                    ]
+                }
+            ]
+        };
         if (lop) hsWhere.lop = lop;
         const hsList = await HocSinh.findAll({
             where: hsWhere,
-            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh'],
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'dang_hoc', 'ngay_vao', 'ngay_rut'],
             order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
         });
         const hsIds = hsList.map(h => h.id);
@@ -1423,9 +1482,17 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
         // 6. Tính toán từng HS
         const data = hsList.map(hs => {
             const recs = ddMap[hs.id] || {};
-            // Số ngày HS phải tham gia (loại trừ ngày đặc biệt không dành cho HS)
-            const phaiAn = ngayAn.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
-            const phaiNgu = ngayNgu.filter(ngay => isHsAllowed(hs, cauhinhNgayMap[ngay] || null));
+            // Số ngày HS phải tham gia: nằm trong khoảng [hs.ngay_vao, hs.ngay_rut] VÀ được phép theo ngày đặc biệt
+            const phaiAn = ngayAn.filter(ngay => {
+                if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
+                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
+            });
+            const phaiNgu = ngayNgu.filter(ngay => {
+                if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
+                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
+            });
 
             const vangAn = phaiAn.filter(ng => recs[ng]?.an === 1).length;
             const phepAn = phaiAn.filter(ng => recs[ng]?.an === 2).length;
@@ -1440,11 +1507,29 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
             const tienAn = (phaiAn.length - phepAn) * giaAn; // Vắng không trừ tiền, chỉ phép mới trừ
             const tienNgu = (phaiNgu.length - phepNgu) * giaNgu;
 
+            // Ghi chú thời gian vào / rút bán trú
+            const ghiChuParts = [];
+            if (hs.ngay_vao && hs.ngay_vao >= start && hs.ngay_vao <= end) {
+                const [vy, vm, vd] = hs.ngay_vao.split('-');
+                ghiChuParts.push(`Vào ${vd}/${vm}`);
+            }
+            if (hs.ngay_rut && hs.ngay_rut >= start && hs.ngay_rut <= end) {
+                const [ry, rm, rd] = hs.ngay_rut.split('-');
+                ghiChuParts.push(`Rút ${rd}/${rm}`);
+            } else if (!hs.dang_hoc && hs.ngay_rut) {
+                const [ry, rm, rd] = hs.ngay_rut.split('-');
+                ghiChuParts.push(`Rút ${rd}/${rm}`);
+            }
+
             return {
                 id: hs.id,
                 ho_ten: hs.ho_ten,
                 lop: hs.lop,
                 gioi_tinh: hs.gioi_tinh,
+                dang_hoc: hs.dang_hoc,
+                ngay_vao: hs.ngay_vao,
+                ngay_rut: hs.ngay_rut,
+                ghi_chu: ghiChuParts.join(', '),
                 tong_buoi_an: phaiAn.length,
                 co_mat_an: coMatAn,
                 vang_an: vangAn,

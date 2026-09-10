@@ -57,7 +57,7 @@ router.get('/api/hocsinh/', loginRequired, roleRequired('admin', 'quan_ly'), asy
         { association: 'phong_an', attributes: ['ma_phong', 'loai_phong'] },
         { association: 'phong_ngu', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] },
       ],
-      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+      order: [['id', 'ASC']],
     });
     return res.json({ ok: true, hocsinh: list });
   } catch (err) {
@@ -106,7 +106,7 @@ router.get('/api/hocsinh/download-pdf/:filename', loginRequired, (req, res) => {
 /** POST /api/hocsinh/save/ - Tạo / cập nhật học sinh */
 router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
-    const { id, ho_ten, lop, gioi_tinh, ma_phong_an, ma_phong_ngu, dang_hoc, ghi_chu } = req.body;
+    const { id, ho_ten, lop, gioi_tinh, ma_phong_an, ma_phong_ngu, dang_hoc, ngay_vao, ngay_rut, ghi_chu } = req.body;
 
     // Validate phòng
     if (ma_phong_an) {
@@ -122,11 +122,16 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
       if (count >= pngu.suc_chua) return res.status(400).json({ ok: false, error: `Phòng ngủ đã đủ ${pngu.suc_chua} học sinh` });
     }
 
+    const isDangHoc = dang_hoc !== undefined ? (dang_hoc === true || dang_hoc === 'true' || dang_hoc === 1) : true;
+    const finalNgayRut = !isDangHoc ? (ngay_rut || new Date().toISOString().split('T')[0]) : null;
+
     const data = {
       ho_ten, lop, gioi_tinh: parseInt(gioi_tinh),
       ma_phong_an_id: ma_phong_an || null,
       ma_phong_ngu_id: ma_phong_ngu || null,
-      dang_hoc: dang_hoc !== undefined ? dang_hoc : true,
+      dang_hoc: isDangHoc,
+      ngay_vao: ngay_vao || null,
+      ngay_rut: finalNgayRut,
       ghi_chu: ghi_chu || null,
     };
 

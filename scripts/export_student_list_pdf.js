@@ -104,6 +104,11 @@ function generateClassHtml(lop, students, namHoc, nguoiPhuTrach, todayStr, isPag
 
     <div class="sig-wrap">
       <div class="sig-col">
+        <div class="sig-role" style="margin-top: 16px;">NGƯỜI LẬP BẢNG</div>
+        <div class="sig-hint">(Ký và ghi rõ họ tên)</div>
+        <div class="sig-space"></div>
+      </div>
+      <div class="sig-col">
         <div class="sig-date">${todayStr}</div>
         <div class="sig-role">GIÁM ĐỐC</div>
         <div class="sig-hint">(Ký và ghi rõ họ tên)</div>
@@ -231,7 +236,7 @@ function getBaseCss() {
   }
   .sig-wrap {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: flex-start;
     margin-top: 8px;
     page-break-inside: avoid;
