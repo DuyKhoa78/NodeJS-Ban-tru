@@ -5,7 +5,7 @@ const session = require('express-session');
 const morgan = require('morgan');
 const path = require('path');
 
-const { sequelize, CauHinhNgay, LichSuThaoTac, BaoCaoTruc } = require('./src/models');
+const { sequelize, CauHinhNgay, LichSuThaoTac, BaoCaoTruc, DiemDanhDraft } = require('./src/models');
 const sessionConfig = require('./src/config/session');
 const errorHandler = require('./src/middleware/errorHandler');
 
@@ -31,14 +31,15 @@ const ALLOWED_ORIGINS = [
   /\.vercel\.app$/,
   // Domain tuùy chỉnh (nếu có)
   process.env.FRONTEND_URL,
-  // Local dev
+  // Local dev & LAN mobile access
   'http://localhost:5173',
   'http://localhost:3000',
+  /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/,
 ].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
-    // cho phép các request không có origin (Postman, health check)
+    // cho phép các request không có origin (Postman, health check, mobile app)
     if (!origin) return callback(null, true);
     const allowed = ALLOWED_ORIGINS.some((o) =>
       o instanceof RegExp ? o.test(origin) : o === origin
@@ -108,8 +109,8 @@ app.use(errorHandler);
 // ─── Start Server ─────────────────────────────────────────────────────────────
 async function startServer() {
   // Luôn khởi động server trước
-  app.listen(PORT, () => {
-    console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Server đang chạy tại http://0.0.0.0:${PORT} (Local: http://localhost:${PORT})`);
   });
 
   // Kết nối DB sau (không crash server nếu lỗi DB)
@@ -120,11 +121,24 @@ async function startServer() {
     await CauHinhNgay.sync({ alter: true });
     await LichSuThaoTac.sync({ alter: true });
     await BaoCaoTruc.sync({ alter: true });
+    await DiemDanhDraft.sync({ alter: true });
     await sequelize.query(`
       ALTER TABLE "quanli_hocsinh" ADD COLUMN IF NOT EXISTS "ngay_vao" DATE;
       ALTER TABLE "quanli_hocsinh" ADD COLUMN IF NOT EXISTS "ngay_rut" DATE;
-    `).catch(() => {});
-    console.log('✅ Bảng core_cauhinh_ngay, core_lichsuthaotac & nghiepvu_baocaotruc sẵn sàng!');
+      ALTER TABLE "accounts_staffuser" ADD COLUMN IF NOT EXISTS "giao_vien_id" INTEGER;
+      ALTER TYPE "enum_accounts_staffuser_role" ADD VALUE IF NOT EXISTS 'giao_vien';
+      ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "thoi_gian_diem_danh_an" TIMESTAMPTZ;
+      ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "thoi_gian_diem_danh_ngu" TIMESTAMPTZ;
+      ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "phuong_thuc_an" VARCHAR(20) DEFAULT 'manual';
+      ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "phuong_thuc_ngu" VARCHAR(20) DEFAULT 'manual';
+      ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "nguoi_diem_danh_id" INTEGER;
+      ALTER TABLE "nghiepvu_diemdanhphong" ADD COLUMN IF NOT EXISTS "trang_thai_chot" VARCHAR(20) DEFAULT 'chua_chot';
+      ALTER TABLE "nghiepvu_diemdanhphong" ADD COLUMN IF NOT EXISTS "ma_gv_chot_id" INTEGER;
+      ALTER TABLE "nghiepvu_diemdanhphong" ADD COLUMN IF NOT EXISTS "ghi_chu_chot" TEXT;
+    `).catch((err) => {
+      console.warn('Migration warning:', err.message);
+    });
+    console.log('✅ Bảng core_cauhinh_ngay, core_lichsuthaotac, nghiepvu_diemdanh_draft & các trường điểm danh sẵn sàng!');
     // Tự động đồng bộ sequence ID tránh xung đột primary key
     await sequelize.query(`
       SELECT setval('quanli_hocsinh_id_seq', COALESCE((SELECT MAX(id) FROM quanli_hocsinh), 1), true);

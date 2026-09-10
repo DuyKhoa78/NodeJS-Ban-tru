@@ -17,8 +17,13 @@ const CauHinhTuan = require('./CauHinhTuan');
 const CauHinhNgay = require('./CauHinhNgay');
 const LichSuThaoTac = require('./LichSuThaoTac');
 const BaoCaoTruc = require('./BaoCaoTruc');
+const DiemDanhDraft = require('./DiemDanhDraft');
 
 // ─── Associations ─────────────────────────────────────────────────────────────
+
+// StaffUser ↔ GiaoVien
+StaffUser.belongsTo(GiaoVien, { foreignKey: 'giao_vien_id', as: 'giao_vien' });
+GiaoVien.hasOne(StaffUser, { foreignKey: 'giao_vien_id', as: 'user_account' });
 
 // HocSinh ↔ Phong (phòng ăn & phòng ngủ)
 HocSinh.belongsTo(Phong, { foreignKey: 'ma_phong_an_id', as: 'phong_an' });
@@ -42,6 +47,10 @@ HocSinh.hasMany(DiemDanhHS, { foreignKey: 'ma_hs_id', as: 'diem_danh' });
 // DiemDanhPhong ↔ Phong
 DiemDanhPhong.belongsTo(Phong, { foreignKey: 'ma_phong_id', as: 'phong' });
 Phong.hasMany(DiemDanhPhong, { foreignKey: 'ma_phong_id', as: 'diem_danh_phong' });
+
+// DiemDanhDraft ↔ Phong
+DiemDanhDraft.belongsTo(Phong, { foreignKey: 'ma_phong_id', as: 'phong' });
+Phong.hasMany(DiemDanhDraft, { foreignKey: 'ma_phong_id', as: 'draft_diem_danh' });
 
 // PhanCongTrucGV ↔ GiaoVien, Phong
 PhanCongTrucGV.belongsTo(GiaoVien, { foreignKey: 'ma_gv_id', as: 'giao_vien' });
@@ -68,6 +77,7 @@ module.exports = {
   CauHinhHeThong,
   DiemDanhHS,
   DiemDanhPhong,
+  DiemDanhDraft,
   PhanCongTrucGV,
   LichTrucCoDinh,
   CauHinhTuan,

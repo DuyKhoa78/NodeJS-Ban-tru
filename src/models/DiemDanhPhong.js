@@ -29,6 +29,22 @@ const DiemDanhPhong = sequelize.define('DiemDanhPhong', {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  trang_thai_chot: {
+    type: DataTypes.STRING(20),
+    defaultValue: 'chua_chot',
+    comment: 'chua_chot | da_chot | tu_dong_chot | khong_diem_danh',
+  },
+  ma_gv_chot_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: { model: 'accounts_staffuser', key: 'id' },
+    comment: 'Tài khoản người đã bấm chốt (hoặc null nếu tự động)',
+  },
+  ghi_chu_chot: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: 'Ghi chú chốt điểm danh (ví dụ: Chốt đúng hạn, Hệ thống tự động chốt lúc 11:30)',
+  },
 }, {
   tableName: 'nghiepvu_diemdanhphong',
   timestamps: false,

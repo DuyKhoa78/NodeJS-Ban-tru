@@ -15,8 +15,10 @@ router.use(attachUser);
  */
 router.get('/api/taikhoan/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
+    const { GiaoVien } = require('../models');
     const users = await StaffUser.findAll({
       attributes: { exclude: ['password'] },
+      include: [{ model: GiaoVien, as: 'giao_vien', attributes: ['id', 'ho_ten'] }],
       order: [['id', 'ASC']],
     });
     return res.json({ ok: true, users });
@@ -28,19 +30,21 @@ router.get('/api/taikhoan/', loginRequired, roleRequired('admin'), async (req, r
 /**
  * POST /api/taikhoan/save/
  * Tạo hoặc cập nhật user
- * Body: { id, username, fullname, position, role, is_active, password }
+ * Body: { id, username, fullname, position, role, is_active, password, giao_vien_id }
  */
 router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
-    const { id, username, fullname, position, role, is_active, password } = req.body;
+    const { id, username, fullname, position, role, is_active, password, giao_vien_id } = req.body;
     const currentUser = req.user || req.session?.user;
 
     if (!username) return res.status(400).json({ ok: false, error: 'Username không được để trống' });
 
-    const validRoles = ['admin', 'hoc_vu', 'quan_ly', 'ke_toan'];
+    const validRoles = ['admin', 'hoc_vu', 'quan_ly', 'ke_toan', 'giao_vien'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ ok: false, error: 'Role không hợp lệ' });
     }
+
+    const gvId = role === 'giao_vien' && giao_vien_id ? parseInt(giao_vien_id, 10) : null;
 
     if (id) {
       // Update
@@ -73,6 +77,7 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
         fullname,
         position,
         role: user.is_superuser ? 'admin' : role,
+        giao_vien_id: gvId,
         is_active: user.is_superuser ? true : is_active,
       });
 
@@ -87,6 +92,7 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
       const newUser = await StaffUser.create({
         username, fullname, position, role,
         password: hashed,
+        giao_vien_id: gvId,
         is_active: is_active !== undefined ? is_active : true,
         is_superuser: false,
         date_joined: new Date(),

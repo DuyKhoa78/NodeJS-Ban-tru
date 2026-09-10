@@ -25,8 +25,14 @@ const StaffUser = sequelize.define('StaffUser', {
     defaultValue: '',
   },
   role: {
-    type: DataTypes.ENUM('admin', 'hoc_vu', 'quan_ly', 'ke_toan'),
+    type: DataTypes.ENUM('admin', 'hoc_vu', 'quan_ly', 'ke_toan', 'giao_vien'),
     defaultValue: 'ke_toan',
+  },
+  giao_vien_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: { model: 'quanli_giaovien', key: 'id' },
+    comment: 'ID giáo viên liên kết nếu role là giao_vien',
   },
   email: {
     type: DataTypes.STRING(254),
@@ -67,8 +73,11 @@ StaffUser.prototype.get_is_quan_ly = function () {
 StaffUser.prototype.get_is_ke_toan = function () {
   return this.role === 'ke_toan';
 };
+StaffUser.prototype.get_is_giao_vien = function () {
+  return this.role === 'giao_vien';
+};
 StaffUser.prototype.can_diem_danh = function () {
-  return this.is_superuser || this.role === 'admin' || this.role === 'hoc_vu';
+  return this.is_superuser || this.role === 'admin' || this.role === 'hoc_vu' || this.role === 'giao_vien';
 };
 StaffUser.prototype.can_quan_ly_danh_muc = function () {
   return this.is_superuser || this.role === 'admin' || this.role === 'quan_ly';

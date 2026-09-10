@@ -30,6 +30,31 @@ const DiemDanhHS = sequelize.define('DiemDanhHS', {
     type: DataTypes.STRING(255),
     allowNull: true,
   },
+  thoi_gian_diem_danh_an: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Thời điểm điểm danh ca ăn',
+  },
+  thoi_gian_diem_danh_ngu: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Thời điểm điểm danh ca ngủ',
+  },
+  phuong_thuc_an: {
+    type: DataTypes.STRING(20),
+    defaultValue: 'manual',
+    comment: 'qr hoặc manual',
+  },
+  phuong_thuc_ngu: {
+    type: DataTypes.STRING(20),
+    defaultValue: 'manual',
+    comment: 'qr hoặc manual',
+  },
+  nguoi_diem_danh_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: { model: 'accounts_staffuser', key: 'id' },
+  },
 }, {
   tableName: 'nghiepvu_diemdanhhs',
   timestamps: false,
