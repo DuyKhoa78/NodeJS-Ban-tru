@@ -902,15 +902,18 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             const recordsToSave = [];
             for (const hs of allStudents) {
                 const cur = existingMap[hs.id];
-                // Nếu Admin/Học vụ đã lưu điểm danh (có mặt=0 hoặc phép=2), giữ nguyên — KHÔNG ghi đè
-                if (cur && cur[fieldStatus] !== null && cur[fieldStatus] !== undefined) {
-                    continue;
+                const scanned = scannedMap[hs.id];
+                // Lấy trạng thái từ danh sách gửi lên, nếu không có thì giữ trạng thái hiện tại hoặc mặc định Có mặt (0)
+                let finalStatus;
+                if (scanned && scanned.status !== undefined && scanned.status !== null) {
+                    finalStatus = Number(scanned.status);
+                } else if (cur && cur[fieldStatus] !== null && cur[fieldStatus] !== undefined) {
+                    finalStatus = cur[fieldStatus];
+                } else {
+                    finalStatus = 0; // Mặc định có mặt
                 }
 
-                const scanned = scannedMap[hs.id];
-                // Mặc định Có mặt (0) khi điểm danh thủ công, chỉ ghi nhận Vắng (1) hoặc Phép (2) nếu được chỉ định rõ
-                let finalStatus = (scanned && scanned.status !== undefined && scanned.status !== null) ? Number(scanned.status) : 0;
-                let phuongThuc = scanned?.phuong_thuc || 'thu_cong';
+                let phuongThuc = scanned?.phuong_thuc || (cur ? cur[fieldPhuongThuc] : 'thu_cong');
                 let thoiGian = scanned?.scanned_at || new Date();
 
                 recordsToSave.push({
@@ -921,7 +924,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                     [fieldThoiGian]: thoiGian,
                     [oppositeField]: cur ? cur[oppositeField] : null,
                     nguoi_diem_danh_id: req.user.id,
-                    ghi_chu: scanned?.ghi_chu || null
+                    ghi_chu: scanned?.ghi_chu || (cur ? cur.ghi_chu : null)
                 });
             }
 
