@@ -242,130 +242,9 @@ function getVietnamTime(dateObj = new Date()) {
 }
 
 async function checkAndAutoRescueRooms(targetNgay) {
-    try {
-        const vn = getVietnamTime();
-        const ngayCheck = targetNgay || vn.todayStr;
-        const isToday = (ngayCheck === vn.todayStr);
-        const isPast = (ngayCheck < vn.todayStr);
-
-        // Giờ chốt: Ca ăn 11:30 (690 phút), Ca ngủ 12:00 (720 phút)
-        const shiftsToCheck = [];
-        if (isPast) {
-            shiftsToCheck.push(0, 1);
-        } else if (isToday) {
-            if (vn.totalMins >= 690) shiftsToCheck.push(0); // Ca ăn quá 11:30
-            if (vn.totalMins >= 720) shiftsToCheck.push(1); // Ca ngủ quá 12:00
-        }
-
-        if (shiftsToCheck.length === 0) return;
-
-        for (const loaiTruc of shiftsToCheck) {
-            // Lấy tất cả các phân công trực trong ngày và ca này
-            const phanCongs = await PhanCongTrucGV.findAll({
-                where: { ngay: ngayCheck, loai_truc: loaiTruc }
-            });
-            if (!phanCongs || phanCongs.length === 0) continue;
-
-            const roomCodes = [...new Set(phanCongs.map(pc => pc.ma_phong_id))];
-
-            for (const ma_phong of roomCodes) {
-                // Kiểm tra xem phòng này đã chốt chuẩn chưa
-                const phongStatus = await DiemDanhPhong.findOne({
-                    where: { ngay: ngayCheck, loai_truc: loaiTruc, ma_phong_id: ma_phong }
-                });
-
-                if (phongStatus && phongStatus.da_diem_danh && phongStatus.trang_thai_chot === 'da_chot') {
-                    continue; // GV đã hoàn thành chốt chuẩn đúng hạn
-                }
-
-                // Nếu chưa chốt hoặc đang dang dở, tự động cứu dữ liệu nháp!
-                const draft = await DiemDanhDraft.findOne({
-                    where: { ngay: ngayCheck, loai_truc: loaiTruc, ma_phong_id: ma_phong }
-                });
-
-                const fieldPhong = loaiTruc === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
-                const students = await HocSinh.findAll({
-                    where: { [fieldPhong]: ma_phong, dang_hoc: true }
-                });
-
-                if (!students || students.length === 0) continue;
-
-                // Lấy điểm danh hiện có (đặc biệt là các bạn đã báo Phép bởi Admin)
-                const existingDD = await DiemDanhHS.findAll({
-                    where: {
-                        ngay: ngayCheck,
-                        ma_hs_id: { [Op.in]: students.map(s => s.id) }
-                    }
-                });
-                const ddMap = {};
-                existingDD.forEach(d => { ddMap[d.ma_hs_id] = d; });
-
-                const draftList = (draft && Array.isArray(draft.danh_sach_hs)) ? draft.danh_sach_hs : [];
-                const draftMap = {};
-                draftList.forEach(d => { draftMap[d.id] = d; });
-
-                const fieldStatus = loaiTruc === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
-                const fieldPhuongThuc = loaiTruc === 0 ? 'phuong_thuc_an' : 'phuong_thuc_ngu';
-                const fieldThoiGian = loaiTruc === 0 ? 'thoi_gian_diem_danh_an' : 'thoi_gian_diem_danh_ngu';
-
-                const recordsToUpsert = [];
-                for (const hs of students) {
-                    const currentRecord = ddMap[hs.id];
-                    // Nếu Admin/Học vụ đã lưu điểm danh (có mặt=0 hoặc phép=2), giữ nguyên — KHÔNG ghi đè
-                    if (currentRecord && currentRecord[fieldStatus] !== null && currentRecord[fieldStatus] !== undefined) {
-                        continue;
-                    }
-
-                    const draftItem = draftMap[hs.id];
-                    let finalStatus = 1; // Mặc định vắng mặt nếu chưa quét
-                    let phuongThuc = null;
-                    let thoiGian = null;
-
-                    if (draftItem && draftItem.status === 0) {
-                        finalStatus = 0; // Đã quét Có mặt
-                        phuongThuc = draftItem.phuong_thuc || 'qr';
-                        thoiGian = draftItem.scanned_at || new Date();
-                    }
-
-                    recordsToUpsert.push({
-                        ma_hs_id: hs.id,
-                        ngay: ngayCheck,
-                        [fieldStatus]: finalStatus,
-                        [fieldPhuongThuc]: phuongThuc,
-                        [fieldThoiGian]: thoiGian,
-                        nguoi_diem_danh_id: draft?.ma_gv_id || null
-                    });
-                }
-
-                if (recordsToUpsert.length > 0) {
-                    await DiemDanhHS.bulkCreate(recordsToUpsert, {
-                        updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'nguoi_diem_danh_id']
-                    });
-                }
-
-                const cutoffLabel = loaiTruc === 0 ? '11:30' : '12:00';
-                const hasDraftData = draftList.some(d => d.status === 0);
-                await DiemDanhPhong.upsert({
-                    ma_phong_id: ma_phong,
-                    ngay: ngayCheck,
-                    loai_truc: loaiTruc,
-                    da_diem_danh: true,
-                    thoi_gian: new Date(),
-                    trang_thai_chot: 'tu_dong_chot',
-                    ghi_chu_chot: hasDraftData
-                        ? `Hệ thống tự động thu hồi dữ liệu nháp lúc ${cutoffLabel} (GV chưa nhấn Chốt/Gặp sự cố)`
-                        : `Hệ thống tự động chốt vắng lúc ${cutoffLabel} (GV không thực hiện điểm danh)`
-                });
-
-                if (draft) {
-                    draft.is_chot = true;
-                    await draft.save();
-                }
-            }
-        }
-    } catch (err) {
-        console.error('Lỗi khi auto-rescue điểm danh:', err);
-    }
+    // Tắt hoàn toàn tự động chốt vắng vì nhà trường chưa triển khai quét mã QR.
+    // Tránh việc hệ thống tự động ghi vắng tất cả học sinh khi điểm danh thủ công.
+    return;
 }
 
 /** GET /api/diemdanh/?ngay=&loai= */
@@ -1029,15 +908,10 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 }
 
                 const scanned = scannedMap[hs.id];
-                let finalStatus = 1; // Chưa quét thẻ -> Vắng mặt
-                let phuongThuc = null;
-                let thoiGian = null;
-
-                if (scanned && scanned.status === 0) {
-                    finalStatus = 0; // Có mặt
-                    phuongThuc = scanned.phuong_thuc || 'qr';
-                    thoiGian = scanned.scanned_at || new Date();
-                }
+                // Mặc định Có mặt (0) khi điểm danh thủ công, chỉ ghi nhận Vắng (1) hoặc Phép (2) nếu được chỉ định rõ
+                let finalStatus = (scanned && scanned.status !== undefined && scanned.status !== null) ? Number(scanned.status) : 0;
+                let phuongThuc = scanned?.phuong_thuc || 'thu_cong';
+                let thoiGian = scanned?.scanned_at || new Date();
 
                 recordsToSave.push({
                     ma_hs_id: hs.id,
