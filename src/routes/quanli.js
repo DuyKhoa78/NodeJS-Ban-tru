@@ -995,12 +995,17 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
       ngay_cap_nhat: new Date().toISOString().split('T')[0],
     };
     if (ma_bao_mat_gv !== undefined) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
-    if (bao_tri !== undefined) updateData.bao_tri = Boolean(bao_tri);
-    if (thong_bao_bao_tri !== undefined) updateData.thong_bao_bao_tri = String(thong_bao_bao_tri).trim();
-    if (thoi_gian_bao_tri !== undefined) updateData.thoi_gian_bao_tri = String(thoi_gian_bao_tri).trim();
+    
+    // Chỉ duy nhất Super Admin mới có quyền cấu hình chế độ bảo trì
+    const isSuperAdmin = Boolean(req.user?.is_superuser || req.user?.role === 'super_admin');
+    if (isSuperAdmin) {
+      if (bao_tri !== undefined) updateData.bao_tri = Boolean(bao_tri);
+      if (thong_bao_bao_tri !== undefined) updateData.thong_bao_bao_tri = String(thong_bao_bao_tri).trim();
+      if (thoi_gian_bao_tri !== undefined) updateData.thoi_gian_bao_tri = String(thoi_gian_bao_tri).trim();
+    }
 
     await CauHinhHeThong.upsert(updateData);
-    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Bảo trì=${updateData.bao_tri ? 'BẬT' : 'TẮT'}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
+    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Bảo trì=${updateData.bao_tri !== undefined ? (updateData.bao_tri ? 'BẬT' : 'TẮT') : 'Không đổi'}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
