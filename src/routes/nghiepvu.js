@@ -820,8 +820,8 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
     }
 });
 
-/** POST /api/diemdanh/chot-phong/ - Chốt dữ liệu điểm danh phòng lên Tổng (hoặc Cập nhật bổ sung) */
-router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'hoc_vu', 'giao_vien'), async (req, res) => {
+/** POST /api/diemdanh/chot-phong/ - Chốt dữ liệu điểm danh phòng lên Tổng (Dành riêng cho Admin / Học vụ) */
+router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
     try {
         const { ngay, loai_truc, ma_phong_id, danh_sach_hs, ghi_chu } = req.body;
         if (!ngay || loai_truc === undefined || !ma_phong_id) {
