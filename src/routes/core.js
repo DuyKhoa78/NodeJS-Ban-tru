@@ -123,18 +123,23 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
 
     // Kiểm tra xem hôm nay có lịch bán trú không
     let hasSchedule = false;
-    const dateObj = new Date(today + 'T00:00:00');
+    const dateObj = new Date(today + 'T12:00:00');
     const dow = dateObj.getDay();
     if (dow !== 0 && dow !== 6) {
       if (dow === 5) {
-        // Thứ 6: có lịch nếu cờ show_t6 = true HOẶC đã có GV được phân công thực tế
-        const mon = new Date(dateObj);
-        mon.setDate(dateObj.getDate() - 4);
-        const monStr = mon.toISOString().split('T')[0];
+        // Thứ 6: có lịch nếu cờ show_t6 = true VÀ đã có GV được phân công thực tế
+        const d = new Date(today + 'T12:00:00');
+        const day = d.getDay() || 7;
+        d.setDate(d.getDate() - day + 1);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const monStr = `${yyyy}-${mm}-${dd}`;
+
         const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
         const showT6 = cauHinhTuan?.show_t6 ?? false;
         const pcCountT6 = await PhanCongTrucGV.count({ where: { ngay: today } });
-        hasSchedule = showT6 || pcCountT6 > 0;
+        hasSchedule = showT6 && pcCountT6 > 0;
       } else {
         // T2-T5: học bán trú bình thường, kiểm tra phân công trực
         const pcCount = await PhanCongTrucGV.count({ where: { ngay: today } });

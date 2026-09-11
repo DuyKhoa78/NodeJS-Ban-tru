@@ -418,19 +418,18 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
 
         // Kiểm tra xem ngày này có lịch bán trú không
         let hasSchedule = false;
-        const dateObj = new Date(ngayFilter + 'T00:00:00');
+        const dateObj = new Date(ngayFilter + 'T12:00:00');
         const dow = dateObj.getDay(); // 0=CN, 1=T2, ..., 4=T5, 5=T6
 
         if (dow === 0 || dow === 6) {
             hasSchedule = false;
         } else if (dow === 5) {
-            const mon = new Date(dateObj);
-            mon.setDate(dateObj.getDate() - 4);
-            const monStr = mon.toISOString().split('T')[0];
+            const monStr = getMondayOfWeek(ngayFilter);
             const cauHinhTuan = await CauHinhTuan.findByPk(monStr);
             const showT6 = cauHinhTuan?.show_t6 ?? false;
             const pcCountT6 = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
-            hasSchedule = showT6 || pcCountT6 > 0;
+            // Thứ 6 chỉ có lịch trực khi được mở thứ 6 VÀ thực tế có phân công trực
+            hasSchedule = showT6 && pcCountT6 > 0;
         } else {
             const pcCount = await PhanCongTrucGV.count({ where: { ngay: ngayFilter, loai_truc: loaiTrucQuery } });
             hasSchedule = pcCount > 0;
