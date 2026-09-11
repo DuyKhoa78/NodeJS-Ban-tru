@@ -1081,7 +1081,7 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
                 ? dr.danh_sach_hs.filter(x => x.status === 0).length
                 : 0;
 
-            const isCompleted = ps?.trang_thai_chot === 'da_chot' || ps?.trang_thai_chot === 'tu_dong_chot' || Boolean(ps?.da_diem_danh);
+            const isCompleted = ps?.trang_thai_chot === 'da_chot' || Boolean(ps?.da_diem_danh);
 
             result.push({
                 ma_phong,
