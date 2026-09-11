@@ -906,11 +906,16 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 // Lấy trạng thái từ danh sách gửi lên, nếu không có thì giữ trạng thái hiện tại hoặc mặc định Có mặt (0)
                 let finalStatus;
                 if (scanned && scanned.status !== undefined && scanned.status !== null) {
-                    finalStatus = Number(scanned.status);
+                    const stNum = Number(scanned.status);
+                    if (stNum === 0 || stNum === 1 || stNum === 2) {
+                        finalStatus = stNum;
+                    } else {
+                        finalStatus = 1; // Chưa điểm danh thì ghi nhận VẮNG
+                    }
                 } else if (cur && cur[fieldStatus] !== null && cur[fieldStatus] !== undefined) {
                     finalStatus = cur[fieldStatus];
                 } else {
-                    finalStatus = 0; // Mặc định có mặt
+                    finalStatus = 1; // Chưa điểm danh thì ghi nhận VẮNG
                 }
 
                 let phuongThuc = scanned?.phuong_thuc || (cur ? cur[fieldPhuongThuc] : 'thu_cong');
@@ -960,9 +965,18 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
             await t.commit();
 
+            let countCoMat = 0, countVang = 0, countPhep = 0;
+            recordsToSave.forEach(r => {
+                const s = r[fieldStatus];
+                if (s === 0) countCoMat++;
+                else if (s === 1) countVang++;
+                else if (s === 2) countPhep++;
+            });
+
             return res.json({
                 ok: true,
-                message: `Đã chốt điểm danh phòng ${ma_phong_id} lên Tổng thành công (${recordsToSave.length} học sinh)!`
+                message: `Đã chốt danh sách phòng ${ma_phong_id} thành công (${countCoMat} có mặt, ${countVang} vắng, ${countPhep} phép).`,
+                counts: { comat: countCoMat, vang: countVang, phep: countPhep }
             });
         } catch (err) {
             await t.rollback();
@@ -1067,16 +1081,19 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
                 ? dr.danh_sach_hs.filter(x => x.status === 0).length
                 : 0;
 
+            const isCompleted = ps?.trang_thai_chot === 'da_chot' || ps?.trang_thai_chot === 'tu_dong_chot' || Boolean(ps?.da_diem_danh);
+
             result.push({
                 ma_phong,
                 phong: item.phong,
                 giao_vien: item.giao_vien,
                 total_hs: totalHs,
-                trang_thai_chot: ps?.trang_thai_chot || (ps?.da_diem_danh ? 'da_chot' : 'chua_chot'),
+                is_completed: isCompleted,
+                trang_thai_chot: isCompleted ? 'da_chot' : 'chua_chot',
                 thoi_gian_chot: ps?.thoi_gian || null,
                 ghi_chu_chot: ps?.ghi_chu_chot || null,
                 draft_count: draftCount,
-                stats: { comat, vang, phep, chua_diem_danh: totalHs - (comat + vang + phep) }
+                stats: isCompleted ? { comat, vang, phep, chua_diem_danh: 0 } : null
             });
         }
 
