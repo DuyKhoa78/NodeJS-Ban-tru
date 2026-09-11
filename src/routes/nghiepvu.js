@@ -311,8 +311,8 @@ async function checkAndAutoRescueRooms(targetNgay) {
                 const recordsToUpsert = [];
                 for (const hs of students) {
                     const currentRecord = ddMap[hs.id];
-                    // Nếu đã báo Phép (status 2), giữ nguyên Phép
-                    if (currentRecord && currentRecord[fieldStatus] === 2) {
+                    // Nếu Admin/Học vụ đã lưu điểm danh (có mặt=0 hoặc phép=2), giữ nguyên — KHÔNG ghi đè
+                    if (currentRecord && currentRecord[fieldStatus] !== null && currentRecord[fieldStatus] !== undefined) {
                         continue;
                     }
 
@@ -374,8 +374,12 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
         const { ngay, loai } = req.query;
         const ngayFilter = ngay || new Date().toISOString().split('T')[0];
 
-        // Tự động kiểm tra và cứu dữ liệu nháp nếu đã quá giờ cắt
-        await checkAndAutoRescueRooms(ngayFilter);
+        // Auto-rescue chỉ chạy khi GV truy cập (cứu dữ liệu nháp nếu GV quên chốt).
+        // Admin/Học vụ tự điểm danh tay → KHÔNG chạy auto-rescue (tránh tự động ghi vắng tất cả).
+        const isAdminOrHocVu = req.user.is_admin || req.user.is_superuser || req.user.role === 'hoc_vu' || req.user.role === 'admin';
+        if (!isAdminOrHocVu) {
+            await checkAndAutoRescueRooms(ngayFilter);
+        }
 
         const records = await DiemDanhHS.findAll({
             where: { ngay: ngayFilter },
@@ -914,8 +918,11 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
 
         const loaiTrucNum = Number(loai_truc);
 
-        // Auto rescue nếu quá giờ cắt
-        await checkAndAutoRescueRooms(ngay);
+        // Auto rescue chỉ chạy cho GV (Admin tự điểm danh tay)
+        const isAdminOrHocVu2 = req.user.is_admin || req.user.is_superuser || req.user.role === 'hoc_vu' || req.user.role === 'admin';
+        if (!isAdminOrHocVu2) {
+            await checkAndAutoRescueRooms(ngay);
+        }
 
         const draft = await DiemDanhDraft.findOne({
             where: { ngay, loai_truc: loaiTrucNum, ma_phong_id }
@@ -1017,8 +1024,8 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             const recordsToSave = [];
             for (const hs of allStudents) {
                 const cur = existingMap[hs.id];
-                // Nếu học sinh đã được Admin báo Phép (status 2), giữ nguyên Phép
-                if (cur && cur[fieldStatus] === 2) {
+                // Nếu Admin/Học vụ đã lưu điểm danh (có mặt=0 hoặc phép=2), giữ nguyên — KHÔNG ghi đè
+                if (cur && cur[fieldStatus] !== null && cur[fieldStatus] !== undefined) {
                     continue;
                 }
 
@@ -1098,8 +1105,11 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
         const targetNgay = ngay || vn.todayStr;
         const loaiTrucNum = (loai === 'ngu' || loai === '1') ? 1 : 0;
 
-        // Auto rescue nếu quá giờ cắt
-        await checkAndAutoRescueRooms(targetNgay);
+        // Auto rescue chỉ chạy cho GV (Admin tự điểm danh tay)
+        const isAdminOrHocVu3 = req.user.is_admin || req.user.is_superuser || req.user.role === 'hoc_vu' || req.user.role === 'admin';
+        if (!isAdminOrHocVu3) {
+            await checkAndAutoRescueRooms(targetNgay);
+        }
 
         // Lấy tất cả phân công của ca này
         const phanCongs = await PhanCongTrucGV.findAll({
