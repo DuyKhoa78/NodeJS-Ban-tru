@@ -132,9 +132,9 @@ async function maintenanceCheck(req, res, next) {
     const { CauHinhHeThong } = require('../models');
     const heThong = await CauHinhHeThong.findByPk(1);
     if (heThong && heThong.bao_tri) {
-      // Nếu user là admin / superuser thì cho phép truy cập
+      // Chỉ cho phép Super Admin (is_superuser: true hoặc role: super_admin) truy cập khi bảo trì
       const user = req.user || req.session?.user;
-      if (user && (user.is_superuser || user.is_admin || user.role === 'admin')) {
+      if (user && (user.is_superuser === true || user.role === 'super_admin')) {
         return next();
       }
 
@@ -143,7 +143,7 @@ async function maintenanceCheck(req, res, next) {
         return res.status(503).json({
           ok: false,
           maintenance: true,
-          error: heThong.thong_bao_bao_tri || 'Hệ thống Quản lý Bán trú đang được bảo trì và nâng cấp định kỳ.',
+          error: heThong.thong_bao_bao_tri || 'Hệ thống đang bảo trì vui lòng quay lại sau.',
           thoi_gian: heThong.thoi_gian_bao_tri || 'Dự kiến hoàn tất trong ít phút',
         });
       }
