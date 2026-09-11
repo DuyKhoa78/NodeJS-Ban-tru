@@ -49,6 +49,25 @@ router.get('/api/nguoidung/quanly/', loginRequired, roleRequired('admin', 'quan_
 // HỌC SINH
 // ═══════════════════════════════════════════════════════════════════
 
+// Tính ngày vào mặc định theo quy tắc: Sau 9h sáng VN (UTC+7) tính ngày hôm sau, trước hoặc đúng 9h sáng tính hôm nay
+function getDefaultNgayVaoVN() {
+  const now = new Date();
+  const vnStr = now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' });
+  const vnNow = new Date(vnStr);
+  const hours = vnNow.getHours();
+  const minutes = vnNow.getMinutes();
+  const seconds = vnNow.getSeconds();
+  
+  const isAfter9AM = hours > 9 || (hours === 9 && (minutes > 0 || seconds > 0));
+  if (isAfter9AM) {
+    vnNow.setDate(vnNow.getDate() + 1);
+  }
+  const yyyy = vnNow.getFullYear();
+  const mm = String(vnNow.getMonth() + 1).padStart(2, '0');
+  const dd = String(vnNow.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 /** GET /api/hocsinh/ - Danh sách toàn bộ học sinh */
 router.get('/api/hocsinh/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
@@ -123,14 +142,28 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
     }
 
     const isDangHoc = dang_hoc !== undefined ? (dang_hoc === true || dang_hoc === 'true' || dang_hoc === 1) : true;
-    const finalNgayRut = !isDangHoc ? (ngay_rut || new Date().toISOString().split('T')[0]) : null;
+
+    // Ràng buộc: Nếu rút bán trú thì bắt buộc phải nhập ngày rút
+    if (!isDangHoc && !ngay_rut) {
+      return res.status(400).json({ ok: false, error: 'Học sinh rút bán trú bắt buộc phải có ngày rút bán trú!' });
+    }
+
+    const finalDangHoc = ngay_rut ? false : isDangHoc;
+    const finalNgayRut = !finalDangHoc ? ngay_rut : null;
+
+    // Ràng buộc: Thêm mới học sinh nếu để trống ngày vào thì mặc định theo quy tắc:
+    // Sau 9h sáng tính ngày hôm sau, trước hoặc đúng 9h sáng tính hôm nay
+    let finalNgayVao = ngay_vao || null;
+    if (!id && !finalNgayVao) {
+      finalNgayVao = getDefaultNgayVaoVN();
+    }
 
     const data = {
       ho_ten, lop, gioi_tinh: parseInt(gioi_tinh),
       ma_phong_an_id: ma_phong_an || null,
       ma_phong_ngu_id: ma_phong_ngu || null,
-      dang_hoc: isDangHoc,
-      ngay_vao: ngay_vao || null,
+      dang_hoc: finalDangHoc,
+      ngay_vao: finalNgayVao,
       ngay_rut: finalNgayRut,
       ghi_chu: ghi_chu || null,
     };
