@@ -26,6 +26,25 @@ async function handleLogin(req, res) {
       return res.status(401).json({ ok: false, error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
     }
 
+    // Kiểm tra chế độ bảo trì: Chỉ cho phép Super Admin đăng nhập
+    try {
+      const { CauHinhHeThong } = require('../models');
+      const heThong = await CauHinhHeThong.findByPk(1);
+      if (heThong && heThong.bao_tri) {
+        const isSuperAdmin = Boolean(user.is_superuser || user.role === 'super_admin');
+        if (!isSuperAdmin) {
+          return res.status(503).json({
+            ok: false,
+            maintenance: true,
+            error: heThong.thong_bao_bao_tri || 'Hệ thống đang bảo trì vui lòng quay lại sau.',
+            thoi_gian: heThong.thoi_gian_bao_tri || 'Dự kiến hoàn tất trong ít phút',
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error checking maintenance during login:', err);
+    }
+
     const sessionUser = buildSessionUser(user);
 
     // Thời hạn token & session: ghi nhớ 30 ngày nếu chọn "nhớ tôi", ngược lại 24 giờ
