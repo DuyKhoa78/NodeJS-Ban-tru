@@ -3015,21 +3015,71 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             return plain;
         });
 
+        // Hàm kiểm tra một phòng có được báo cáo bao phủ (kể cả trường hợp gộp cụm như D21, D22, D23 hay P6, P7, P8)
+        const isRoomCovered = (roomCode, reportedRoomStrings) => {
+            const cleanCode = String(roomCode || '').trim().toUpperCase().replace(/\./g, '');
+            for (const rep of reportedRoomStrings) {
+                if (!rep) continue;
+                const cleanRep = String(rep).trim().toUpperCase().replace(/\./g, '');
+                if (cleanCode === cleanRep) return true;
+                const parts = cleanRep.split(/[,;\-\/]+/).map(s => s.trim()).filter(Boolean);
+                if (parts.includes(cleanCode)) return true;
+                const matchLetter = cleanCode.match(/^([A-Z]+)(\d+)$/);
+                if (matchLetter) {
+                    const prefix = matchLetter[1];
+                    const num = matchLetter[2];
+                    if (parts.some(p => p === cleanCode || (p === num && parts.some(sub => sub.startsWith(prefix))))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
         // Chỉ tính phòng chưa nộp nếu start === end (xem theo ngày cụ thể)
         let phongChuaBaoCaoAn = [];
         let phongChuaBaoCaoNgu = [];
+        let giamSatChuaBaoCao = [];
+        let tongGiamSatPhanCong = 0;
 
         if (start === end) {
-            const reportedRoomsAn = new Set(records.filter(r => r.ca_truc === 0).map(r => r.ma_phong));
-            const reportedRoomsNgu = new Set(records.filter(r => r.ca_truc === 1).map(r => r.ma_phong));
+            const reportedRoomsAn = records.filter(r => r.ca_truc === 0).map(r => r.ma_phong);
+            const reportedRoomsNgu = records.filter(r => r.ca_truc === 1).map(r => r.ma_phong);
 
             phongChuaBaoCaoAn = allPhong
-                .filter(p => p.loai_phong === 0 && !reportedRoomsAn.has(p.ma_phong))
+                .filter(p => p.loai_phong === 0 && !isRoomCovered(p.ma_phong, reportedRoomsAn))
                 .map(p => p.ma_phong);
 
             phongChuaBaoCaoNgu = allPhong
-                .filter(p => p.loai_phong === 1 && !reportedRoomsNgu.has(p.ma_phong))
+                .filter(p => p.loai_phong === 1 && !isRoomCovered(p.ma_phong, reportedRoomsNgu))
                 .map(p => p.ma_phong);
+
+            // Kiểm tra tiến độ báo cáo của các GV được phân công Giám sát (nhiem_vu = 1)
+            try {
+                const pcGiamSat = await PhanCongTrucGV.findAll({
+                    where: { ngay: start, nhiem_vu: 1 },
+                    include: [{ model: GiaoVien, as: 'giao_vien', attributes: ['id', 'ho_ten'] }]
+                });
+                const gvGSMap = new Map();
+                pcGiamSat.forEach(pc => {
+                    if (pc.giao_vien?.ho_ten) {
+                        gvGSMap.set(pc.giao_vien.ho_ten.trim().toLowerCase(), pc.giao_vien.ho_ten.trim());
+                    }
+                });
+                tongGiamSatPhanCong = gvGSMap.size;
+                const reportedGSGV = new Set(
+                    records
+                        .filter(r => r.ca_truc === 2 || (r.vsat_thuc_pham && r.vsat_thuc_pham.trim()))
+                        .map(r => (r.ho_ten_gv || '').trim().toLowerCase())
+                );
+                for (const [lowerName, originalName] of gvGSMap.entries()) {
+                    if (!reportedGSGV.has(lowerName)) {
+                        giamSatChuaBaoCao.push(originalName);
+                    }
+                }
+            } catch (pcErr) {
+                console.error('Lỗi kiểm tra phân công giám sát:', pcErr.message);
+            }
         }
 
         const coViPhamRecords = records.filter(r => r.hs_vi_pham && r.hs_vi_pham.trim());
@@ -3058,6 +3108,7 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             totalVang: records.reduce((sum, r) => sum + (r.so_hs_vang || 0), 0),
             totalPhongAn: allPhong.filter(p => p.loai_phong === 0).length,
             totalPhongNgu: allPhong.filter(p => p.loai_phong === 1).length,
+            tongGiamSatPhanCong,
             gvSummary: Object.values(gvSummaryMap).sort((a, b) => b.tong_ca - a.tong_ca),
         };
 
@@ -3074,6 +3125,8 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             nguoi_phu_trach: heThong?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
             phongChuaBaoCaoAn,
             phongChuaBaoCaoNgu,
+            giamSatChuaBaoCao,
+            tongGiamSatPhanCong,
         });
     } catch (err) {
         return res.status(500).json({ ok: false, error: err.message });
@@ -3082,10 +3135,16 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
 
 /**
  * POST /api/baocaotruc/delete/
- * Xóa 1 bản ghi báo cáo trực
+ * Xóa 1 bản ghi báo cáo trực (CHỈ SUPER ADMIN mới có quyền để đảm bảo công bằng)
  */
-router.post('/api/baocaotruc/delete/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.post('/api/baocaotruc/delete/', loginRequired, async (req, res) => {
     try {
+        const user = req.user || req.session?.user;
+        const isSuper = Boolean(user && (user.is_superuser === true || user.role === 'super_admin'));
+        if (!isSuper) {
+            return res.status(403).json({ ok: false, error: 'Chỉ Super Admin mới có quyền xóa báo cáo trực để đảm bảo tính công bằng.' });
+        }
+
         const { id } = req.body;
         if (!id) return res.status(400).json({ ok: false, error: 'Thiếu ID bản ghi' });
 
@@ -3100,10 +3159,16 @@ router.post('/api/baocaotruc/delete/', loginRequired, roleRequired('admin', 'qua
 
 /**
  * POST /api/baocaotruc/delete-range/
- * Xóa toàn bộ báo cáo trực theo Ngày / Tuần / Tháng sau khi đã xuất báo cáo
+ * Xóa toàn bộ báo cáo trực theo Ngày / Tuần / Tháng sau khi đã xuất báo cáo (CHỈ SUPER ADMIN)
  */
-router.post('/api/baocaotruc/delete-range/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+router.post('/api/baocaotruc/delete-range/', loginRequired, async (req, res) => {
     try {
+        const user = req.user || req.session?.user;
+        const isSuper = Boolean(user && (user.is_superuser === true || user.role === 'super_admin'));
+        if (!isSuper) {
+            return res.status(403).json({ ok: false, error: 'Chỉ Super Admin mới có quyền xóa báo cáo trực để đảm bảo tính công bằng.' });
+        }
+
         const { tu_ngay, den_ngay, thang, nam, ca_truc } = req.body;
         let where = {};
         if (thang && nam) {
