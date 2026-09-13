@@ -60,6 +60,8 @@ const PhanCongTrucGV = sequelize.define('PhanCongTrucGV', {
     {
       unique: true,
       fields: ['ma_gv_id', 'ngay', 'loai_truc', 'ma_phong_id'],
+      // Lưu ý nghiệp vụ: Một GV có thể phụ trách cụm phòng nhỏ liền kề trong cùng ca trực (ví dụ: P6-P7-P8),
+      // do đó ma_phong_id là thành phần bắt buộc của unique index để đảm bảo tính toàn vẹn dữ liệu.
     },
   ],
 });

@@ -3,7 +3,7 @@ const router = express.Router();
 const { Op } = require('sequelize');
 const NodeCache = require('node-cache');
 const { HocSinh, DiemDanhHS, CauHinhHeThong, PhanCongTrucGV, CauHinhTuan, CauHinhNgay } = require('../models');
-const { loginRequired, attachUser } = require('../middleware/auth');
+const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 
 // ── Cache nhẹ cho dữ liệu ít thay đổi (dashboard: 3 phút, cauhinh: 1 giờ) ──
 const dashboardCache = new NodeCache({ stdTTL: 180, checkperiod: 60 });
@@ -23,7 +23,7 @@ router.get('/api/health', (req, res) => {
  * Trả danh sách toàn bộ học sinh để in thẻ bán trú
  * Hỗ trợ lọc theo lop hoặc khoi (ví dụ: ?lop=10A1 hoặc ?khoi=10)
  */
-router.get('/api/the-ban-tru/danh-sach', async (req, res) => {
+router.get('/api/the-ban-tru/danh-sach', loginRequired, roleRequired('admin', 'hoc_vu', 'giao_vien'), async (req, res) => {
   try {
     const { lop, khoi, id } = req.query;
     const where = { dang_hoc: true };

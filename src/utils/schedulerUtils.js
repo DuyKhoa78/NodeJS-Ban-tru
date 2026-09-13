@@ -102,44 +102,54 @@ function phanGVVaoPhongNgu(phongNgu, gvNam, gvNu) {
  * @returns {{ assignments: Array, gvDuocChon: Array }}
  */
 function phanCongMotNgay({ thu, phongAn, phongNgu, gvAll, loadMap }) {
-  // ── 1. Nhu cầu ─────────────────────────────────────────────────────
+  // ── 1. Nhu cầu chi tiết theo nhiệm vụ ──────────────────────────────
   const phongNguNam = phongNgu.filter(p => p.gioi_tinh === 0);
   const phongNguNu  = phongNgu.filter(p => p.gioi_tinh === 1);
 
-  const needNguNam = tinhSoGVCanThiet(phongNguNam);
-  const needNguNu  = tinhSoGVCanThiet(phongNguNu);
-  const needAn     = tinhSoGVCanThiet(phongAn);
+  const countDuty = (rooms, duty) => rooms.reduce((sum, p) => sum + (duty === 0 ? (p.sl_diem_danh || 1) : (p.sl_ho_tro || 1)), 0);
 
-  // ── 2. Lọc GV rảnh ─────────────────────────────────────────────────
+  const needNguNamDD = countDuty(phongNguNam, 0);
+  const needNguNamHT = countDuty(phongNguNam, 1);
+  const needNguNuDD  = countDuty(phongNguNu, 0);
+  const needNguNuHT  = countDuty(phongNguNu, 1);
+
+  const needAnDD = countDuty(phongAn, 0);
+  const needAnHT = countDuty(phongAn, 1);
+
+  // ── 2. Lọc GV rảnh theo giới tính & nhiệm vụ ───────────────────────
   const isRanh = gv => Array.isArray(gv.lich_ranh) && gv.lich_ranh.length >= 5 && gv.lich_ranh[thu] === true;
   const gvRanh = gvAll.filter(isRanh);
-  const gvRanhNam = gvRanh.filter(gv => gv.gioi_tinh === 0);
-  const gvRanhNu  = gvRanh.filter(gv => gv.gioi_tinh === 1);
 
-  // ── 3. Chọn GV (Tối ưu để đủ cho cả Ăn và Ngủ) ──────────────────────
-  // Mỗi GV được chọn sẽ trực cả Ăn + Ngủ. 
-  // Cần đủ Nam cho Ngủ Nam, đủ Nữ cho Ngủ Nữ. 
-  // Tổng (Nam + Nữ) phải >= nhu cầu phòng Ăn.
-  const sortedNam = sortByLoad(gvRanhNam, loadMap);
-  const sortedNu  = sortByLoad(gvRanhNu, loadMap);
+  const gvNamDD = sortByLoad(gvRanh.filter(g => g.gioi_tinh === 0 && g.nhiem_vu === 0), loadMap);
+  const gvNamHT = sortByLoad(gvRanh.filter(g => g.gioi_tinh === 0 && g.nhiem_vu === 1), loadMap);
+  const gvNuDD  = sortByLoad(gvRanh.filter(g => g.gioi_tinh === 1 && g.nhiem_vu === 0), loadMap);
+  const gvNuHT  = sortByLoad(gvRanh.filter(g => g.gioi_tinh === 1 && g.nhiem_vu === 1), loadMap);
 
-  // Chọn tối thiểu số lượng cho phòng Ngủ
-  let chosenNam = sortedNam.slice(0, needNguNam);
-  let chosenNu  = sortedNu.slice(0, needNguNu);
+  // ── 3. Chọn GV đảm bảo đủ nhiệm vụ và giới tính ────────────────────
+  let chosenNamDD = gvNamDD.slice(0, needNguNamDD);
+  let chosenNamHT = gvNamHT.slice(0, needNguNamHT);
+  let chosenNuDD  = gvNuDD.slice(0, needNguNuDD);
+  let chosenNuHT  = gvNuHT.slice(0, needNguNuHT);
 
-  // Nếu tổng chọn vẫn ít hơn nhu cầu phòng Ăn, lấy thêm GV (không phân biệt giới tính)
-  let currentTotal = chosenNam.length + chosenNu.length;
-  if (currentTotal < needAn) {
-    const remainingNam = sortedNam.slice(needNguNam);
-    const remainingNu  = sortedNu.slice(needNguNu);
-    const poolConLai = sortByLoad([...remainingNam, ...remainingNu], loadMap);
-    const them = poolConLai.slice(0, needAn - currentTotal);
-    
-    // Tách lại giới tính để đưa vào chosen
-    chosenNam = [...chosenNam, ...them.filter(g => g.gioi_tinh === 0)];
-    chosenNu  = [...chosenNu, ...them.filter(g => g.gioi_tinh === 1)];
+  // Bổ sung thêm nếu phòng Ăn còn thiếu chỉ tiêu DD hoặc HT
+  let totalDD = chosenNamDD.length + chosenNuDD.length;
+  if (totalDD < needAnDD) {
+    const remDD = sortByLoad([...gvNamDD.slice(needNguNamDD), ...gvNuDD.slice(needNguNuDD)], loadMap);
+    const extraDD = remDD.slice(0, needAnDD - totalDD);
+    chosenNamDD = [...chosenNamDD, ...extraDD.filter(g => g.gioi_tinh === 0)];
+    chosenNuDD  = [...chosenNuDD, ...extraDD.filter(g => g.gioi_tinh === 1)];
   }
 
+  let totalHT = chosenNamHT.length + chosenNuHT.length;
+  if (totalHT < needAnHT) {
+    const remHT = sortByLoad([...gvNamHT.slice(needNguNamHT), ...gvNuHT.slice(needNguNuHT)], loadMap);
+    const extraHT = remHT.slice(0, needAnHT - totalHT);
+    chosenNamHT = [...chosenNamHT, ...extraHT.filter(g => g.gioi_tinh === 0)];
+    chosenNuHT  = [...chosenNuHT, ...extraHT.filter(g => g.gioi_tinh === 1)];
+  }
+
+  const chosenNam = [...chosenNamDD, ...chosenNamHT];
+  const chosenNu  = [...chosenNuDD, ...chosenNuHT];
   const gvDuocChon = [...chosenNam, ...chosenNu];
   if (gvDuocChon.length === 0) return { assignments: [], gvDuocChon: [] };
 
@@ -183,11 +193,8 @@ function phanCongLichKhung({ phongs, gvAll }) {
 
     for (const a of assignments) {
       result.push({ ma_phong_id: a.ma_phong_id, ma_gv_id: a.ma_gv_id, thu });
-    }
-
-    // Cập nhật load: mỗi GV được chọn +2 (1 Ăn + 1 Ngủ)
-    for (const gv of gvDuocChon) {
-      loadMap[gv.id] += 2;
+      // Cập nhật load: tính chính xác theo số ca phân công thực tế được giao
+      loadMap[a.ma_gv_id] = (loadMap[a.ma_gv_id] || 0) + 1;
     }
   }
 

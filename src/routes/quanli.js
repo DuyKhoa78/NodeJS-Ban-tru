@@ -13,7 +13,30 @@ const { loginRequired, attachUser, roleRequired } = require('../middleware/auth'
 const { invalidateStaticCaches } = require('../utils/appCache');
 
 router.use(attachUser);
-const upload = multer({ storage: multer.memoryStorage() });
+const uploadCSV = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.csv' || file.mimetype.includes('csv') || file.mimetype === 'text/plain') {
+      cb(null, true);
+    } else {
+      cb(new Error('Hệ thống chỉ chấp nhận định dạng file .csv. Vui lòng lưu file Excel dưới dạng CSV (Comma delimited) trước khi tải lên.'));
+    }
+  },
+});
+
+const handleUploadCSV = (req, res, next) => {
+  uploadCSV.single('file')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ ok: false, error: err.message });
+    }
+    next();
+  });
+};
 
 async function recordAuditLog(req, loai, noidung) {
   try {
@@ -208,15 +231,39 @@ router.post('/api/hocsinh/:pk/delete/', loginRequired, roleRequired('admin'), as
 });
 
 /** POST /api/hocsinh/import/ - Import CSV */
-router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload.single('file'), async (req, res) => {
+router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handleUploadCSV, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Chưa có file CSV. Vui lòng chọn file trước khi import.' });
 
-    const content = req.file.buffer.toString('utf8');
-    const rows = parse(content, { columns: false, skip_empty_lines: true, trim: true });
+    let content = req.file.buffer.toString('utf8');
+    // Xử lý UTF-8 BOM
+    if (content.charCodeAt(0) === 0xFEFF) {
+      content = content.slice(1);
+    }
+
+    let rows;
+    try {
+      rows = parse(content, { columns: false, skip_empty_lines: true, trim: true });
+    } catch (parseErr) {
+      return res.status(400).json({ ok: false, error: `Lỗi đọc định dạng file CSV: ${parseErr.message}` });
+    }
 
     if (!rows || rows.length === 0) {
       return res.status(400).json({ ok: false, error: 'File CSV rỗng hoặc không có dữ liệu.' });
+    }
+
+    if (rows.length > 3000) {
+      return res.status(400).json({ ok: false, error: 'File vượt quá giới hạn tối đa 3.000 dòng. Vui lòng chia nhỏ file để import an toàn.' });
+    }
+
+    // Kiểm tra số lượng cột tối đa 30 cột
+    for (let r = 0; r < Math.min(rows.length, 50); r++) {
+      if (rows[r].length > 30) {
+        return res.status(400).json({
+          ok: false,
+          error: `File có quá nhiều cột (${rows[r].length} cột, tối đa cho phép 30 cột). Vui lòng kiểm tra lại cấu trúc file CSV.`
+        });
+      }
     }
 
     // Kiểm tra xem người dùng có nộp nhầm file Danh sách Giáo viên không
@@ -247,19 +294,30 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
     };
 
     let startIdx = 0;
+    let foundHoTenHeader = false;
+    let foundLopHeader = false;
+
     const isFirstRowHeader = String(rows[0][0]).toLowerCase().includes('stt') || isNaN(Number(rows[0][0]));
     if (isFirstRowHeader) {
       startIdx = 1;
       const hRow = rows[0].map(c => String(c).trim().toLowerCase());
       hRow.forEach((col, idx) => {
         if (col.includes('mã') || col.includes('mshs') || col === 'id') colMap.ma_so_bt = idx;
-        else if (col.includes('họ') || col.includes('tên')) colMap.ho_ten = idx;
+        else if (col.includes('họ') || col.includes('tên')) { colMap.ho_ten = idx; foundHoTenHeader = true; }
         else if (col.includes('giới tính') || col === 'gt') colMap.gioi_tinh = idx;
-        else if (col.includes('lớp')) colMap.lop = idx;
+        else if (col.includes('lớp')) { colMap.lop = idx; foundLopHeader = true; }
         else if (col.includes('ngủ')) colMap.phong_ngu = idx;
         else if (col.includes('ăn')) colMap.phong_an = idx;
         else if (col.includes('ghi chú')) colMap.ghi_chu = idx;
       });
+
+      // Nếu có header nhưng thiếu cột bắt buộc Họ tên hoặc Lớp
+      if (!foundHoTenHeader || !foundLopHeader) {
+        return res.status(400).json({
+          ok: false,
+          error: 'File CSV thiếu các cột bắt buộc: "Họ và tên", "Lớp". Vui lòng kiểm tra lại dòng tiêu đề hoặc tải file mẫu CSV.'
+        });
+      }
     }
 
     let success = 0;
@@ -374,6 +432,9 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), upload
     }
 
     invalidateStaticCaches();
+    if (success === 0 && errors.length > 0) {
+      return res.status(400).json({ ok: false, error: 'Không thể import học sinh do dữ liệu có lỗi.', total: rows.length, success: 0, errors });
+    }
     return res.json({ ok: true, total: rows.length, success, errors });
   } catch (err) {
     return res.status(500).json({ ok: false, error: `Lỗi xử lý file CSV: ${err.message}` });
@@ -630,7 +691,7 @@ router.post('/api/giaovien/:pk/reset-code/', loginRequired, roleRequired('admin'
 });
 
 /** POST /api/giaovien/import/ - Import GV từ CSV và tự sinh mã 5 ký tự không trùng lặp */
-router.post('/api/giaovien/import/', loginRequired, roleRequired('admin'), upload.single('file'), async (req, res) => {
+router.post('/api/giaovien/import/', loginRequired, roleRequired('admin'), handleUploadCSV, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Chưa có file CSV. Vui lòng chọn file trước khi tải lên.' });
 

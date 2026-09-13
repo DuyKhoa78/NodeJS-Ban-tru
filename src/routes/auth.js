@@ -4,6 +4,7 @@ const { StaffUser } = require('../models');
 const { verifyPassword, hashPassword } = require('../utils/password');
 const { buildSessionUser } = require('../utils/userSession');
 const { generateToken } = require('../utils/token');
+const { invalidateUserCache } = require('../middleware/auth');
 
 /**
  * Xử lý Đăng nhập chung cho POST /login/ và POST /api/auth/login
@@ -52,8 +53,8 @@ async function handleLogin(req, res) {
       ? (parseInt(process.env.SESSION_REMEMBER_AGE) || 2592000000)
       : (parseInt(process.env.SESSION_MAX_AGE) || 86400000);
 
-    // Sinh Bearer Token độc lập với cookie (giúp tránh hoàn toàn lỗi chặn Third-Party Cookie)
-    const token = generateToken(user.id, expiresInMs);
+    // Sinh Bearer Token độc lập với cookie (mang theo token_version để hỗ trợ thu hồi tức thì)
+    const token = generateToken(user.id, user.token_version || 0, expiresInMs);
 
     // Thiết lập session (song song cho các môi trường hỗ trợ cookie)
     if (req.session) {
@@ -96,7 +97,13 @@ async function handleLogin(req, res) {
 /**
  * Xử lý Đăng xuất chung
  */
-function handleLogout(req, res) {
+async function handleLogout(req, res) {
+  const currentUserId = req.userId || req.user?.id || req.session?.userId;
+  if (currentUserId) {
+    invalidateUserCache(currentUserId);
+    // Tăng token_version để vô hiệu hóa toàn bộ Bearer Token cũ của tài khoản này
+    await StaffUser.increment('token_version', { by: 1, where: { id: currentUserId } }).catch(() => {});
+  }
   if (req.session) {
     req.session.destroy(() => {});
   }

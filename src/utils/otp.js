@@ -1,11 +1,19 @@
+const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
 /**
- * Tạo mã OTP 6 chữ số ngẫu nhiên
+ * Tạo mã OTP 6 chữ số ngẫu nhiên an toàn bằng bộ sinh số mật mã
  * @returns {string}
  */
 function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+/**
+ * Băm OTP bằng SHA-256 để lưu an toàn vào session
+ */
+function hashOTP(otpCode) {
+  return crypto.createHash('sha256').update(String(otpCode)).digest('hex');
 }
 
 /**
@@ -62,4 +70,4 @@ async function sendOTPEmail(toEmail, otpCode) {
   await transporter.sendMail(mailOptions);
 }
 
-module.exports = { generateOTP, sendOTPEmail };
+module.exports = { generateOTP, sendOTPEmail, hashOTP };

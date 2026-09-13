@@ -7,6 +7,15 @@ const { verifyToken } = require('../utils/token');
 const userAuthCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 /**
+ * Xóa cache của user ngay lập tức (khi đăng xuất, đổi mật khẩu, đổi quyền, khóa tài khoản)
+ */
+function invalidateUserCache(userId) {
+  if (userId) {
+    userAuthCache.del(String(userId));
+  }
+}
+
+/**
  * Middleware: Attach user vào req.user từ Token (Authorization header) hoặc Session
  */
 async function attachUser(req, res, next) {
@@ -24,14 +33,20 @@ async function attachUser(req, res, next) {
           const user = await StaffUser.findByPk(uid);
           if (user && user.is_active) {
             sessionUser = buildSessionUser(user);
+            sessionUser.token_version = user.token_version ?? 0;
             userAuthCache.set(String(uid), sessionUser);
           }
         }
         if (sessionUser && sessionUser.is_active) {
+          // Token bắt buộc phải có tokenVersion và khớp chính xác với token_version hiện tại của user
+          if (payload.tokenVersion === undefined || payload.tokenVersion !== (sessionUser.token_version ?? 0)) {
+            invalidateUserCache(uid);
+            return res.status(401).json({ ok: false, error: 'Phiên làm việc đã hết hạn hoặc token đã bị thu hồi' });
+          }
           req.user = sessionUser;
-          req.userId = payload.userId;
+          req.userId = uid;
           if (req.session) {
-            req.session.userId = payload.userId;
+            req.session.userId = uid;
             req.session.user = sessionUser;
           }
           return next();
@@ -124,7 +139,7 @@ async function maintenanceCheck(req, res, next) {
     '/health',
   ];
 
-  if (bypassPaths.includes(req.path) || req.path.startsWith('/api/auth/')) {
+  if (bypassPaths.includes(req.path) || req.path.startsWith('/api/auth/') || req.path.startsWith('/api/webhook/')) {
     return next();
   }
 
@@ -155,5 +170,5 @@ async function maintenanceCheck(req, res, next) {
   next();
 }
 
-module.exports = { loginRequired, attachUser, roleRequired, maintenanceCheck };
+module.exports = { loginRequired, attachUser, roleRequired, maintenanceCheck, invalidateUserCache };
 

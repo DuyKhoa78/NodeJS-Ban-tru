@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { StaffUser } = require('../models');
-const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
+const { loginRequired, attachUser, roleRequired, invalidateUserCache } = require('../middleware/auth');
 const { hashPassword, verifyPassword } = require('../utils/password');
-const { generateOTP, sendOTPEmail } = require('../utils/otp');
+const { generateOTP, sendOTPEmail, hashOTP } = require('../utils/otp');
 
 router.use(attachUser);
 
@@ -81,6 +81,9 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
         is_active: user.is_superuser ? true : is_active,
       });
 
+      invalidateUserCache(user.id);
+      await user.increment('token_version', { by: 1 }).catch(() => {});
+
       return res.json({ ok: true, message: 'Cập nhật tài khoản thành công' });
     } else {
       // Create
@@ -130,6 +133,7 @@ router.post('/api/taikhoan/delete/', loginRequired, roleRequired('admin'), async
       return res.status(403).json({ ok: false, error: 'Chỉ Super Admin mới có quyền xóa tài khoản Quản trị viên' });
     }
 
+    invalidateUserCache(id);
     await user.destroy();
     return res.json({ ok: true, message: 'Đã xóa tài khoản' });
   } catch (err) {
@@ -146,8 +150,8 @@ router.post('/api/taikhoan/reset-pw/', loginRequired, roleRequired('admin'), asy
     const { id, new_password } = req.body;
     const currentUser = req.user || req.session?.user;
 
-    if (!new_password || new_password.length < 6) {
-      return res.status(400).json({ ok: false, error: 'Mật khẩu mới ít nhất 6 ký tự' });
+    if (!new_password || new_password.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Mật khẩu mới phải có ít nhất 8 ký tự' });
     }
 
     const user = await StaffUser.findByPk(id);
@@ -160,6 +164,10 @@ router.post('/api/taikhoan/reset-pw/', loginRequired, roleRequired('admin'), asy
 
     const hashed = await hashPassword(new_password);
     await user.update({ password: hashed });
+
+    invalidateUserCache(user.id);
+    await user.increment('token_version', { by: 1 }).catch(() => {});
+
     return res.json({ ok: true, message: 'Đặt lại mật khẩu thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -170,13 +178,15 @@ router.post('/api/taikhoan/reset-pw/', loginRequired, roleRequired('admin'), asy
 
 /**
  * GET /api/profile/
- * Trả thông tin profile của user hiện tại
+ * Trả thông tin user đang đăng nhập
  */
 router.get('/api/profile/', loginRequired, async (req, res) => {
   try {
-    const user = await StaffUser.findByPk(req.session.userId, {
+    const userId = req.userId || (req.user && req.user.id) || req.session.userId;
+    const user = await StaffUser.findByPk(userId, {
       attributes: { exclude: ['password'] },
     });
+    if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy thông tin' });
     return res.json({ ok: true, user });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -184,27 +194,24 @@ router.get('/api/profile/', loginRequired, async (req, res) => {
 });
 
 /**
- * POST /api/profile/save/
- * Cập nhật thông tin cá nhân (không bao gồm password)
- * Body: { fullname, position, email }
+ * POST /api/profile/update/
+ * Body: { fullname, email, position }
  */
-router.post('/api/profile/save/', loginRequired, async (req, res) => {
+router.post('/api/profile/update/', loginRequired, async (req, res) => {
   try {
-    const { fullname, position, email } = req.body;
-    const user = await StaffUser.findByPk(req.session.userId);
+    const { fullname, email, position } = req.body;
+    const userId = req.userId || (req.user && req.user.id) || req.session.userId;
+    const user = await StaffUser.findByPk(userId);
     if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy người dùng' });
 
-    await user.update({ fullname, position, email });
+    await user.update({
+      fullname: fullname !== undefined ? fullname : user.fullname,
+      email: email !== undefined ? email : user.email,
+      position: position !== undefined ? position : user.position,
+    });
 
-    // Cập nhật session
-    req.session.user = {
-      ...req.session.user,
-      fullname: user.fullname,
-      position: user.position,
-      email: user.email,
-    };
-
-    return res.json({ ok: true, message: 'Cập nhật thông tin thành công' });
+    invalidateUserCache(user.id);
+    return res.json({ ok: true, message: 'Cập nhật thông tin thành công!' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -221,8 +228,8 @@ router.post('/api/profile/change-password/', loginRequired, async (req, res) => 
     if (!current_password || !new_password) {
       return res.status(400).json({ ok: false, error: 'Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới' });
     }
-    if (new_password.length < 6) {
-      return res.status(400).json({ ok: false, error: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+    if (new_password.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Mật khẩu mới phải có ít nhất 8 ký tự' });
     }
 
     const userId = req.userId || (req.user && req.user.id) || req.session.userId;
@@ -236,6 +243,9 @@ router.post('/api/profile/change-password/', loginRequired, async (req, res) => 
 
     const hashed = await hashPassword(new_password);
     await user.update({ password: hashed });
+
+    invalidateUserCache(user.id);
+    await user.increment('token_version', { by: 1 }).catch(() => {});
 
     return res.json({ ok: true, message: 'Đổi mật khẩu thành công!' });
   } catch (err) {
@@ -251,29 +261,41 @@ router.post('/api/profile/change-password/', loginRequired, async (req, res) => 
 router.post('/api/profile/send-otp/', loginRequired, async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
-    if (!new_password || new_password.length < 6) {
-      return res.status(400).json({ ok: false, error: 'Mật khẩu mới ít nhất 6 ký tự' });
+    if (!new_password || new_password.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Mật khẩu mới phải có ít nhất 8 ký tự' });
     }
 
-    const user = await StaffUser.findByPk(req.session.userId);
+    // Giới hạn gửi lại OTP tối thiểu 60 giây
+    if (req.session?.otp_time && (Date.now() - req.session.otp_time < 60000)) {
+      const waitSec = Math.ceil((60000 - (Date.now() - req.session.otp_time)) / 1000);
+      return res.status(429).json({ ok: false, error: `Vui lòng đợi ${waitSec} giây trước khi yêu cầu gửi lại mã OTP` });
+    }
+
+    const userId = req.userId || (req.user && req.user.id) || req.session.userId;
+    const user = await StaffUser.findByPk(userId);
+    if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy tài khoản' });
+
     const isValid = await verifyPassword(current_password, user.password);
     if (!isValid) {
       return res.status(401).json({ ok: false, error: 'Mật khẩu hiện tại không đúng' });
     }
 
     if (!user.email) {
-      return res.status(400).json({ ok: false, error: 'Tài khoản chưa có email' });
+      return res.status(400).json({ ok: false, error: 'Tài khoản chưa có email để nhận mã OTP' });
     }
 
     const otp = generateOTP();
-    // Lưu OTP vào session (5 phút)
-    req.session.otp_code = otp;
-    req.session.otp_time = Date.now();
-    req.session.new_password = new_password;
+    // Lưu OTP dạng hash vào session (hạn 5 phút)
+    if (req.session) {
+      req.session.otp_hash = hashOTP(otp);
+      req.session.otp_time = Date.now();
+      req.session.otp_attempts = 0;
+      req.session.otp_new_password = new_password;
+    }
 
     await sendOTPEmail(user.email, otp);
 
-    return res.json({ ok: true, message: `OTP đã được gửi đến ${user.email}` });
+    return res.json({ ok: true, message: `Mã OTP đã được gửi đến ${user.email}` });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -287,32 +309,53 @@ router.post('/api/profile/send-otp/', loginRequired, async (req, res) => {
 router.post('/api/profile/verify-otp/', loginRequired, async (req, res) => {
   try {
     const { otp } = req.body;
-    const { otp_code, otp_time, new_password } = req.session;
+    const { otp_hash, otp_time, otp_new_password } = req.session || {};
 
-    if (!otp_code) {
-      return res.status(400).json({ ok: false, error: 'Chưa gửi OTP' });
+    if (!otp_hash || !otp_new_password) {
+      return res.status(400).json({ ok: false, error: 'Chưa có yêu cầu OTP hoặc mã đã được sử dụng' });
     }
 
     // Kiểm tra hết hạn (5 phút = 300000ms)
     if (Date.now() - otp_time > 300000) {
-      delete req.session.otp_code;
+      delete req.session.otp_hash;
       delete req.session.otp_time;
-      delete req.session.new_password;
-      return res.status(400).json({ ok: false, error: 'OTP đã hết hạn, vui lòng gửi lại' });
+      delete req.session.otp_new_password;
+      delete req.session.otp_attempts;
+      return res.status(400).json({ ok: false, error: 'Mã OTP đã hết hạn, vui lòng yêu cầu mã mới' });
     }
 
-    if (otp !== otp_code) {
-      return res.status(400).json({ ok: false, error: 'OTP không đúng' });
+    // Giới hạn số lần thử (tối đa 5 lần)
+    req.session.otp_attempts = (req.session.otp_attempts || 0) + 1;
+    if (req.session.otp_attempts > 5) {
+      delete req.session.otp_hash;
+      delete req.session.otp_time;
+      delete req.session.otp_new_password;
+      delete req.session.otp_attempts;
+      return res.status(429).json({ ok: false, error: 'Bạn đã nhập sai OTP quá 5 lần. Mã OTP đã bị hủy để bảo mật.' });
     }
 
-    const user = await StaffUser.findByPk(req.session.userId);
-    const hashed = await hashPassword(new_password);
+    // Xác minh mã OTP bằng hash SHA-256
+    if (hashOTP(otp) !== otp_hash) {
+      const remaining = 5 - req.session.otp_attempts;
+      return res.status(400).json({ ok: false, error: `Mã OTP không chính xác (còn ${remaining} lần thử)` });
+    }
+
+    const userId = req.userId || (req.user && req.user.id) || req.session.userId;
+    const user = await StaffUser.findByPk(userId);
+    if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy tài khoản' });
+
+    const hashed = await hashPassword(otp_new_password);
     await user.update({ password: hashed });
 
+    // Thu hồi token cũ và xóa cache user
+    invalidateUserCache(user.id);
+    await user.increment('token_version', { by: 1 }).catch(() => {});
+
     // Xóa OTP khỏi session
-    delete req.session.otp_code;
+    delete req.session.otp_hash;
     delete req.session.otp_time;
-    delete req.session.new_password;
+    delete req.session.otp_new_password;
+    delete req.session.otp_attempts;
 
     return res.json({ ok: true, message: 'Đổi mật khẩu thành công' });
   } catch (err) {

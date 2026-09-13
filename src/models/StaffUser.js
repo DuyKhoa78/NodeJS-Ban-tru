@@ -55,6 +55,11 @@ const StaffUser = sequelize.define('StaffUser', {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
   },
+  token_version: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    allowNull: false,
+  },
 }, {
   tableName: 'accounts_staffuser',
   timestamps: false,

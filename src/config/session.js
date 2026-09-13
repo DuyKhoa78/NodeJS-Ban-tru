@@ -21,13 +21,20 @@ const isProd = process.env.NODE_ENV === 'production';
 
 console.log(`🔧 Session config: secure=${isProd}, sameSite=lax, NODE_ENV=${process.env.NODE_ENV}`);
 
+if (!process.env.SESSION_SECRET) {
+  if (isProd) {
+    throw new Error('FATAL: SESSION_SECRET is required in production! Server refused to start.');
+  }
+  console.warn('⚠️ CẢNH BÁO: Chưa thiết lập biến môi trường SESSION_SECRET!');
+}
+
 const sessionConfig = {
   store: new PgSession({
     pool,
     tableName: 'session',
     createTableIfMissing: true,
   }),
-  secret: process.env.SESSION_SECRET || 'bantru-secret',
+  secret: process.env.SESSION_SECRET || 'dev-only-secret-do-not-use-in-prod-xyz123',
   resave: false,
   saveUninitialized: false,
   cookie: {

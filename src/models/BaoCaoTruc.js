@@ -72,6 +72,11 @@ const BaoCaoTruc = sequelize.define('BaoCaoTruc', {
     allowNull: true,
     comment: 'Đề xuất, phản ánh khác',
   },
+  vsat_thuc_pham: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: 'Tình hình vệ sinh an toàn thực phẩm (Ca giám sát)',
+  },
   nguon: {
     type: DataTypes.STRING(50),
     defaultValue: 'google_form',
