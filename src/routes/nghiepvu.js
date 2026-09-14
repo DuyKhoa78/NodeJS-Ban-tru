@@ -203,7 +203,7 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
 router.invalidateStaticCaches = invalidateStaticCaches;
 
 /** GET /api/diemdanh/range/?tu=YYYY-MM-DD&den=YYYY-MM-DD&loai=an|ngu */
-router.get('/api/diemdanh/range/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
+router.get('/api/diemdanh/range/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {
     try {
         const { tu, den, loai } = req.query;
         if (!tu || !den) return res.status(400).json({ ok: false, error: 'Thiếu tham số tu/den' });
