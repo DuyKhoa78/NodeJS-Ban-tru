@@ -17,6 +17,11 @@ const PhanCongTrucGV = sequelize.define('PhanCongTrucGV', {
     allowNull: true,
     references: { model: 'quanli_giaovien', key: 'id' },
   },
+  ten_gv_truc_thay: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    comment: 'Họ tên người ngoài danh sách GV khi trực thay thủ công',
+  },
   ma_phong_id: {
     type: DataTypes.STRING(4),
     allowNull: false,

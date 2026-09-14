@@ -1324,7 +1324,8 @@ function areRoomsInSameCluster(rA, rB) {
 router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
     const t = await sequelize.transaction();
     try {
-        const { id, ma_gv_id, ma_phong_id, ngay, loai_truc, xac_nhan_truc, ma_gv_truc_thay_id, nhiem_vu } = req.body;
+        const { id, ma_gv_id, ma_phong_id, ngay, loai_truc, xac_nhan_truc, ma_gv_truc_thay_id, ten_gv_truc_thay, nhiem_vu } = req.body;
+        const isNgoai = Boolean(ten_gv_truc_thay && String(ten_gv_truc_thay).trim());
         const phong = await Phong.findByPk(ma_phong_id, { transaction: t });
         if (!phong || phong.loai_phong !== parseInt(loai_truc)) {
             await t.rollback();
@@ -1347,54 +1348,56 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
             return res.status(403).json({ ok: false, error: 'Ca trực phòng này đã được chốt sổ điểm danh, không thể thay đổi phân công.' });
         }
 
-        // 1. KIỂM TRA GIỚI TÍNH (Cho phòng ngủ)
-        const targetGvId = ma_gv_truc_thay_id || ma_gv_id;
-        const targetGv = targetGvId === ma_gv_id ? gv : await GiaoVien.findByPk(targetGvId, { transaction: t });
+        // 1. KIỂM TRA GIỚI TÍNH (Cho phòng ngủ) - Chỉ kiểm tra nếu là GV trong trường
+        if (!isNgoai) {
+            const targetGvId = ma_gv_truc_thay_id || ma_gv_id;
+            const targetGv = targetGvId === ma_gv_id ? gv : await GiaoVien.findByPk(targetGvId, { transaction: t });
 
-        if (phong.loai_phong === 1 && phong.gioi_tinh !== null) {
-            if (targetGv.gioi_tinh !== phong.gioi_tinh) {
-                await t.rollback();
-                return res.status(400).json({ ok: false, error: `Phòng ngủ ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} chỉ cho phép giáo viên ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} trực.` });
+            if (phong.loai_phong === 1 && phong.gioi_tinh !== null) {
+                if (targetGv.gioi_tinh !== phong.gioi_tinh) {
+                    await t.rollback();
+                    return res.status(400).json({ ok: false, error: `Phòng ngủ ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} chỉ cho phép giáo viên ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} trực.` });
+                }
             }
-        }
 
-        // 2. KIỂM TRA PHÂN CÔNG PHÒNG & CỤM PHÒNG LIÊN THÔNG
-        const otherAssignments = await PhanCongTrucGV.findAll({
-            where: {
-                ngay,
-                loai_truc: parseInt(loai_truc),
-                [Op.or]: [
-                    { ma_gv_id: targetGvId, ma_gv_truc_thay_id: null },
-                    { ma_gv_truc_thay_id: targetGvId }
-                ],
-                id: { [Op.ne]: id || 0 }
-            },
-            transaction: t
-        });
+            // 2. KIỂM TRA PHÂN CÔNG PHÒNG & CỤM PHÒNG LIÊN THÔNG
+            const otherAssignments = await PhanCongTrucGV.findAll({
+                where: {
+                    ngay,
+                    loai_truc: parseInt(loai_truc),
+                    [Op.or]: [
+                        { ma_gv_id: targetGvId, ma_gv_truc_thay_id: null },
+                        { ma_gv_truc_thay_id: targetGvId }
+                    ],
+                    id: { [Op.ne]: id || 0 }
+                },
+                transaction: t
+            });
 
-        for (const existing of otherAssignments) {
-            if (existing.ma_phong_id === ma_phong_id) {
-                await t.rollback();
-                return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có trong danh sách phân công tại phòng ${ma_phong_id} trong ca trực này rồi.` });
-            }
-            if (!areRoomsInSameCluster(existing.ma_phong_id, ma_phong_id)) {
-                await t.rollback();
-                return res.status(400).json({
-                    ok: false,
-                    error: `Giáo viên ${targetGv.ho_ten} đang trực phòng ${existing.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không thuộc cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33).`
-                });
+            for (const existing of otherAssignments) {
+                if (existing.ma_phong_id === ma_phong_id) {
+                    await t.rollback();
+                    return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có trong danh sách phân công tại phòng ${ma_phong_id} trong ca trực này rồi.` });
+                }
+                if (!areRoomsInSameCluster(existing.ma_phong_id, ma_phong_id)) {
+                    await t.rollback();
+                    return res.status(400).json({
+                        ok: false,
+                        error: `Giáo viên ${targetGv.ho_ten} đang trực phòng ${existing.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không thuộc cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33).`
+                    });
+                }
             }
         }
 
         const assignedNV = nhiem_vu !== undefined && nhiem_vu !== null ? parseInt(nhiem_vu) : (gv.nhiem_vu || 0);
 
         // RÀNG BUỘC TRỰC THAY
-        if (ma_gv_truc_thay_id) {
+        if (ma_gv_truc_thay_id && !isNgoai) {
             if (parseInt(ma_gv_truc_thay_id) === parseInt(ma_gv_id)) {
                 await t.rollback();
                 return res.status(400).json({ ok: false, error: 'Giáo viên không thể trực thay cho chính mình' });
             }
-        } else {
+        } else if (!isNgoai && !ma_gv_truc_thay_id) {
             // CHỈ KIỂM TRA GIỚI HẠN KHI THÊM MỚI (KHÔNG PHẢI TRỰC THAY)
             const slToiDa = assignedNV === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
             const hienTai = await PhanCongTrucGV.count({
@@ -1416,7 +1419,8 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
             loai_truc: parseInt(loai_truc),
             nhiem_vu: assignedNV,
             xac_nhan_truc: xac_nhan_truc !== false,
-            ma_gv_truc_thay_id: ma_gv_truc_thay_id || null,
+            ma_gv_truc_thay_id: isNgoai ? null : (ma_gv_truc_thay_id || null),
+            ten_gv_truc_thay: isNgoai ? String(ten_gv_truc_thay).trim() : null,
             ngay_cap_nhat: new Date(),
             nguoi_cap_nhat_id: req.session?.user?.id || null,
         };
@@ -1461,6 +1465,105 @@ router.post('/admin/lichtruc/:pk/xoa/', loginRequired, roleRequired('admin', 'qu
         await PhanCongTrucGV.destroy({ where: { id: req.params.pk } });
         return res.json({ ok: true, message: 'Đã xóa' });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/** GET /api/lichtruc/day/?ngay=YYYY-MM-DD - Lấy danh sách phân công trực theo ngày cho điểm danh */
+router.get('/api/lichtruc/day/', loginRequired, async (req, res) => {
+    try {
+        const ngay = req.query.ngay || new Date().toISOString().split('T')[0];
+        const records = await PhanCongTrucGV.findAll({
+            where: { ngay },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu'] },
+                { association: 'phong', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh', 'sl_diem_danh', 'sl_ho_tro'] },
+            ],
+            order: [
+                ['loai_truc', 'ASC'],
+                ['ma_phong_id', 'ASC'],
+                ['nhiem_vu', 'ASC']
+            ],
+        });
+        return res.json({ ok: true, records, ngay });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/lichtruc/diem-danh/ - Cập nhật trạng thái điểm danh cho 1 ca */
+router.post('/api/lichtruc/diem-danh/', loginRequired, async (req, res) => {
+    try {
+        const { id, xac_nhan_truc } = req.body;
+        if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id phân công' });
+
+        const pc = await PhanCongTrucGV.findByPk(id);
+        if (!pc) return res.status(404).json({ ok: false, error: 'Không tìm thấy phân công' });
+
+        await pc.update({
+            xac_nhan_truc: xac_nhan_truc !== false,
+            ngay_cap_nhat: new Date(),
+            nguoi_cap_nhat_id: req.session?.user?.id || null,
+        });
+
+        return res.json({ ok: true, message: 'Đã cập nhật điểm danh', xac_nhan_truc: pc.xac_nhan_truc, id });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/lichtruc/diem-danh-all/ - Điểm danh tất cả có mặt trong ngày/ca */
+router.post('/api/lichtruc/diem-danh-all/', loginRequired, async (req, res) => {
+    try {
+        const { ngay, xac_nhan_truc = true, loai_truc } = req.body;
+        if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu ngày' });
+
+        const where = { ngay };
+        if (loai_truc !== undefined && loai_truc !== null && loai_truc !== '') {
+            where.loai_truc = parseInt(loai_truc);
+        }
+
+        const [count] = await PhanCongTrucGV.update(
+            {
+                xac_nhan_truc: xac_nhan_truc !== false,
+                ngay_cap_nhat: new Date(),
+                nguoi_cap_nhat_id: req.session?.user?.id || null,
+            },
+            { where }
+        );
+
+        return res.json({ ok: true, message: `Đã cập nhật ${count} ca trực thành công`, count });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/lichtruc/huy-truc-thay/ - Hủy trực thay, đưa ca về lại giáo viên ban đầu */
+router.post('/api/lichtruc/huy-truc-thay/', loginRequired, async (req, res) => {
+    try {
+        const { id } = req.body;
+        if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id phân công' });
+
+        const pc = await PhanCongTrucGV.findByPk(id);
+        if (!pc) return res.status(404).json({ ok: false, error: 'Không tìm thấy phân công' });
+
+        await pc.update({
+            ma_gv_truc_thay_id: null,
+            ten_gv_truc_thay: null,
+            ngay_cap_nhat: new Date(),
+            nguoi_cap_nhat_id: req.session?.user?.id || null,
+        });
+
+        const updated = await PhanCongTrucGV.findByPk(id, {
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'nhiem_vu', 'gioi_tinh'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'nhiem_vu'] },
+            ]
+        });
+
+        return res.json({ ok: true, message: 'Đã hủy trực thay thành công', record: updated });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 // ══════════════════════════════════════════════
@@ -2279,8 +2382,14 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
         }
 
         const phanCong = await PhanCongTrucGV.findAll({
-            where: { ngay: { [Op.between]: [start, end] } },
-            include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }],
+            where: {
+                ngay: { [Op.between]: [start, end] },
+                xac_nhan_truc: { [Op.ne]: false }, // Chỉ tính các ca có mặt trực thực tế
+            },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
+            ],
         });
 
         const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
@@ -2289,14 +2398,28 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
         const don_gia_an = giaAn ? parseFloat(giaAn.don_gia) : 0;
         const don_gia_ngu = giaNgu ? parseFloat(giaNgu.don_gia) : 0;
 
-        // Đếm lượt trực DISTINCT theo (gv, ngày, ca) – 1 GV trực nhiều phòng cùng ca/ngày chỉ tính 1 lượt
+        // Đếm lượt trực DISTINCT theo (người trực thực tế, ngày, ca)
         const gvMap = {};
         const seenShift = new Set();
         phanCong.forEach(pc => {
-            const id = pc.ma_gv_id;
-            if (!gvMap[id]) gvMap[id] = {
-                id,
-                ho_ten: pc.giao_vien?.ho_ten || '',
+            let actualId, actualName, isNgoai = false;
+            if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+                const cleanName = pc.ten_gv_truc_thay.trim();
+                actualId = `ngoai_${cleanName}`;
+                actualName = cleanName;
+                isNgoai = true;
+            } else if (pc.ma_gv_truc_thay_id) {
+                actualId = pc.ma_gv_truc_thay_id;
+                actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+            } else {
+                actualId = pc.ma_gv_id;
+                actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
+            }
+
+            if (!gvMap[actualId]) gvMap[actualId] = {
+                id: actualId,
+                ho_ten: actualName,
+                is_ngoai: isNgoai,
                 so_ca_an: 0,
                 so_ca_ngu: 0,
                 tong_tien: 0,
@@ -2304,18 +2427,18 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
                 ngay_ngu: []
             };
 
-            const shiftKey = `${id}_${pc.ngay}_${pc.loai_truc}`;
-            if (seenShift.has(shiftKey)) return; // Đã tính lượt này rồi, bỏ qua (GV trực nhiều phòng)
+            const shiftKey = `${actualId}_${pc.ngay}_${pc.loai_truc}`;
+            if (seenShift.has(shiftKey)) return; // Tránh tính trùng nếu 1 người trực nhiều phòng trong 1 ca
             seenShift.add(shiftKey);
 
             if (pc.loai_truc === 0) {
-                gvMap[id].so_ca_an++;
-                gvMap[id].tong_tien += don_gia_an;
-                gvMap[id].ngay_an.push(pc.ngay);
+                gvMap[actualId].so_ca_an++;
+                gvMap[actualId].tong_tien += don_gia_an;
+                gvMap[actualId].ngay_an.push(pc.ngay);
             } else {
-                gvMap[id].so_ca_ngu++;
-                gvMap[id].tong_tien += don_gia_ngu;
-                gvMap[id].ngay_ngu.push(pc.ngay);
+                gvMap[actualId].so_ca_ngu++;
+                gvMap[actualId].tong_tien += don_gia_ngu;
+                gvMap[actualId].ngay_ngu.push(pc.ngay);
             }
         });
         const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
