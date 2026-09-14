@@ -1,31 +1,33 @@
 # HƯỚNG DẪN CẤU HÌNH GOOGLE APPS SCRIPT CHO GOOGLE FORM & GOOGLE SHEETS
 ### Báo cáo ca trực Bán trú - Trường THPT Lê Thị Hồng Gấm
 
-Tài liệu này cung cấp toàn bộ đoạn mã Google Apps Script chuẩn xác nhất (hỗ trợ đầy đủ **17 cột** gồm: **Phần 1: Ca ăn**, **Phần 2: Ca ngủ** và **Phần 3: Giám sát** kèm phòng ăn và vệ sinh an toàn thực phẩm).
+Tài liệu này cung cấp toàn bộ đoạn mã Google Apps Script chuẩn xác nhất (hỗ trợ cấu trúc mới nhất **18 cột** gồm: **Phần 1: Ca ăn**, **Phần 2: Ca ngủ** và **Phần 3: Giám sát** kèm **Danh sách HS vắng** và vệ sinh an toàn thực phẩm).
 
 ---
 
-## 1. BẢNG ĐỐI SOÁT 17 CỘT TRÊN GOOGLE SHEETS
+## 1. BẢNG ĐỐI SOÁT CÁC CỘT TRÊN GOOGLE SHEETS
 
 | Cột | Tên Cột Google Sheet | Thuộc Phần | Ý nghĩa & Dữ liệu mẫu |
 |:---:|:---|:---|:---|
-| **0** (A) | **Dấu thời gian** | Chung | `13/09/2026 22:28:29` |
+| **0** (A) | **Dấu thời gian** | Chung | `14/09/2026 23:53:54` |
 | **1** (B) | **Ca trực** | Phân nhánh | `Trực ăn` / `Trực ngủ` / `Giám sát` |
-| **2** (C) | **Họ tên** | **Phần 3. Giám sát** | Cán bộ / GV giám sát (`Đỗ Văn Thương`) |
-| **3** (D) | **Phòng ăn** | **Phần 3. Giám sát** | Phòng quan sát / giám sát (`P3, 4, 5`) |
-| **4** (E) | **Tình hình nề nếp** | **Phần 3. Giám sát** | Tình hình nề nếp toàn trường (`Bình Thường`) |
-| **5** (F) | **Vệ sinh an toàn thực phẩm** | **Phần 3. Giám sát** | Bếp ăn, lưu mẫu thức ăn |
+| **2** (C) | **Họ tên** | **Phần 3. Giám sát** | Cán bộ / GV giám sát (`Bùi Xuân Kim Sa`) |
+| **3** (D) | **Vị trí / Phòng** | **Phần 3. Giám sát** | Vị trí giám sát (`HTA`, `P5`...) |
+| **4** (E) | **Tình hình nề nếp** | **Phần 3. Giám sát** | Tình hình nề nếp toàn trường (`Tốt`, `Bình thường`) |
+| **5** (F) | **Vệ sinh an toàn thực phẩm** | **Phần 3. Giám sát** | Bếp ăn, lưu mẫu thức ăn (Nếu có) |
 | **6** (G) | **Họ và tên giáo viên** | **Phần 1. Ca ăn** | GV trực phòng ăn (`Huỳnh Duy Khoa`) |
 | **7** (H) | **Phòng ăn** | **Phần 1. Ca ăn** | `HT.A`, `P5`, `A20`... |
 | **8** (I) | **Tình hình chung** | **Phần 1. Ca ăn** | `Tốt`, `Bình thường`... |
-| **9** (J) | **Sỉ số** | **Phần 1. Ca ăn** | Sỉ số học sinh ăn trưa |
-| **10** (K) | **Ghi chú/Góp ý** | **Phần 1. Ca ăn** | Góp ý, CSVC ca ăn |
-| **11** (L) | **Họ và tên** | **Phần 2. Ca ngủ** | GV trực phòng ngủ (`Phạm Thị Thanh Hà`) |
-| **12** (M) | **Phòng ngủ** | **Phần 2. Ca ngủ** | `E3`, `D21`, `HT.A`... |
-| **13** (N) | **Sỉ số** | **Phần 2. Ca ngủ** | Sỉ số học sinh ngủ trưa |
+| **9** (J) | **Sĩ số** | **Phần 1. Ca ăn** | Sĩ số học sinh ăn trưa (`60/58`) |
+| **10** (K) | **Danh sách HS vắng** | **Phần 1. Ca ăn** | Tên HS vắng (Mỗi bạn 1 dòng) |
+| **11** (L) | **Ghi chú/Góp ý** | **Phần 1. Ca ăn** | Góp ý, CSVC ca ăn |
+| **12** (M) | **Họ và tên** | **Phần 2. Ca ngủ** | GV trực phòng ngủ (`Huỳnh Duy Khoa`) |
+| **13** (N) | **Phòng ngủ** | **Phần 2. Ca ngủ** | `D43`, `E3`, `HT.A`... |
 | **14** (O) | **Tình hình chung** | **Phần 2. Ca ngủ** | `Tốt`, `Trật tự`... |
-| **15** (P) | **Ghi nhận HS vi phạm nề nếp (Nếu có)** | **Phần 2. Ca ngủ** | Vi phạm ca ngủ gửi BGH/GVCN |
-| **16** (Q) | **Ghi chú/Góp ý** | **Phần 2. Ca ngủ** | Góp ý, CSVC ca ngủ |
+| **15** (P) | **Sĩ số** | **Phần 2. Ca ngủ** | Sĩ số học sinh ngủ trưa (`78/102`) |
+| **16** (Q) | **Danh sách HS vắng** | **Phần 2. Ca ngủ** | Tên HS vắng (Mỗi bạn 1 dòng) |
+| **17** (R) | **Ghi nhận HS vi phạm nề nếp** | **Phần 2. Ca ngủ** | Vi phạm ca ngủ gửi BGH/GVCN |
+| **18** (S) | **Ghi chú/Góp ý** | **Phần 2. Ca ngủ** | Góp ý, CSVC ca ngủ |
 
 ---
 
@@ -39,8 +41,8 @@ Tài liệu này cung cấp toàn bộ đoạn mã Google Apps Script chuẩn x�
 ```javascript
 /**
  * =========================================================================================
- * GOOGLE APPS SCRIPT - ĐỒNG BỘ BÁO CÁO CA TRỰC THPT LÊ THỊ HỒNG GẤM
- * Chuẩn 17 cột: Trực ăn, Trực ngủ và Phần 3: Giám sát (kèm Phòng ăn & Vệ sinh ATTP)
+ * GOOGLE APPS SCRIPT - ĐỒNG BỘ BÁO CÁO CA TRỰC THPT LÊ THI HỒNG GẤM (CÓ HS VẮNG)
+ * Hỗ trợ Form 3 nhánh: Trực ăn, Trực ngủ và Giám sát kèm Danh sách HS vắng
  * =========================================================================================
  */
 
@@ -65,11 +67,11 @@ function onSheetSubmit(e) {
       return;
     }
 
-    // Thứ tự 17 cột chuẩn (mới nhất):
+    // Thứ tự cột chuẩn mới nhất:
     // [0] Dấu thời gian | [1] Ca trực
-    // Phần 3. Giám sát: [2] Họ tên | [3] Phòng ăn | [4] Tình hình nề nếp | [5] Vệ sinh an toàn thực phẩm
-    // Phần 1. Ca ăn:    [6] Họ và tên giáo viên | [7] Phòng ăn | [8] Tình hình chung | [9] Sỉ số | [10] Ghi chú/Góp ý
-    // Phần 2. Ca ngủ:   [11] Họ và tên | [12] Phòng ngủ | [13] Sỉ số | [14] Tình hình chung | [15] Ghi nhận HS vi phạm nề nếp (Nếu có) | [16] Ghi chú/Góp ý
+    // [Giám sát] [2] Họ tên | [3] Vị trí/Phòng | [4] Tình hình nề nếp | [5] Vệ sinh ATTP
+    // [Ca ăn]    [6] Họ tên GV | [7] Phòng ăn | [8] Tình hình | [9] Sĩ số | [10] Danh sách HS vắng | [11] Ghi chú
+    // [Ca ngủ]   [12] Họ tên GV | [13] Phòng ngủ | [14] Tình hình | [15] Sĩ số | [16] Danh sách HS vắng | [17] HS vi phạm | [18] Ghi chú
     
     const timestamp = row[0] || new Date();
     const ca_truc_raw = String(row[1] || "").toLowerCase().trim();
@@ -79,74 +81,94 @@ function onSheetSubmit(e) {
     let ma_phong = "";
     let si_so = "";
     let tinh_hinh = "Tốt";
+    let danh_sach_vang = "";
+    let so_hs_vang = 0;
     let hs_vi_pham = "";
     let ghi_chu = "";
     let vsat_thuc_pham = "";
 
-    const is17Col = row.length >= 17 || Boolean(row[12]) || Boolean(row[11]) || (Boolean(row[6]) && Boolean(row[7])) || (Boolean(row[2]) && Boolean(row[3]) && Boolean(row[5]));
+    const isNew18Col = row.length >= 18 || Boolean(row[13]) || (Boolean(row[6]) && Boolean(row[10]) && Boolean(row[11]));
 
     // 1. Nhánh Giám sát
     if (
       ca_truc_raw.includes("giám sát") || 
       ca_truc_raw.includes("gám sát") || 
       ca_truc_raw.includes("giamsat") || 
-      (Boolean(row[2]) && !row[6] && !row[11])
+      (Boolean(row[2]) && !row[6] && !row[11] && !row[12])
     ) {
       ca_truc = "Giám sát";
       ho_ten_gv = row[2] || "";
-      if (is17Col) {
-        ma_phong = row[3] || "GIÁM SÁT";
-        tinh_hinh = row[4] || "Tốt";
-        vsat_thuc_pham = row[5] || "";
-        ghi_chu = "";
-      } else {
-        ma_phong = "GIÁM SÁT";
-        tinh_hinh = row[3] || "Tốt";
-        vsat_thuc_pham = row[4] || "";
-        ghi_chu = "";
-      }
+      ma_phong = row[3] || "GIÁM SÁT";
+      tinh_hinh = row[4] || "Tốt";
+      vsat_thuc_pham = row[5] || "";
+      ghi_chu = row[5] ? ("VSATTP: " + row[5]) : "";
     } 
     // 2. Nhánh Ca ngủ
     else if (
       ca_truc_raw.includes("ngủ") || 
       ca_truc_raw.includes("nghi") || 
       ca_truc_raw.includes("nghỉ") || 
-      Boolean(row[12]) ||
-      Boolean(row[11])
+      Boolean(row[12])
     ) {
       ca_truc = "Trực ngủ";
-      if (is17Col) {
+      if (isNew18Col) {
+        ho_ten_gv = row[12] || "";
+        ma_phong = row[13] || "";
+
+        // Nhận diện tự động Sĩ số và Tình hình nếu hoán vị
+        const valA = String(row[14] || "").trim();
+        const valB = String(row[15] || "").trim();
+        const isNumA = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valA);
+        const isNumB = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valB);
+        si_so = isNumB ? valB : (isNumA ? valA : valB);
+        tinh_hinh = isNumB ? (valA || "Tốt") : (isNumA ? (valB || "Tốt") : (valA || "Tốt"));
+
+        danh_sach_vang = row[16] || "";
+        hs_vi_pham = row[17] || "";
+        ghi_chu = row[18] || "";
+      } else {
         ho_ten_gv = row[11] || "";
         ma_phong = row[12] || "";
         si_so = row[13] || "";
         tinh_hinh = row[14] || "Tốt";
         hs_vi_pham = row[15] || "";
         ghi_chu = row[16] || "";
-      } else {
-        ho_ten_gv = row[10] || "";
-        ma_phong = row[11] || "";
-        si_so = row[12] || "";
-        tinh_hinh = row[13] || "Tốt";
-        hs_vi_pham = row[14] || "";
-        ghi_chu = row[15] || "";
       }
     } 
     // 3. Nhánh Ca ăn
     else {
       ca_truc = "Trực ăn";
-      if (is17Col) {
-        ho_ten_gv = row[6] || "";
-        ma_phong = row[7] || "";
+      ho_ten_gv = row[6] || "";
+      ma_phong = row[7] || "";
+
+      if (isNew18Col) {
+        // Nhận diện tự động Sĩ số và Tình hình nếu hoán vị
+        const valA = String(row[8] || "").trim();
+        const valB = String(row[9] || "").trim();
+        const isNumA = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valA);
+        const isNumB = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valB);
+        si_so = isNumB ? valB : (isNumA ? valA : valB);
+        tinh_hinh = isNumB ? (valA || "Tốt") : (isNumA ? (valB || "Tốt") : (valA || "Tốt"));
+
+        danh_sach_vang = row[10] || "";
+        ghi_chu = row[11] || "";
+      } else {
         tinh_hinh = row[8] || "Tốt";
         si_so = row[9] || "";
         ghi_chu = row[10] || "";
-      } else {
-        ho_ten_gv = row[5] || "";
-        ma_phong = row[6] || "";
-        tinh_hinh = row[7] || "Tốt";
-        si_so = row[8] || "";
-        ghi_chu = row[9] || "";
       }
+    }
+
+    // Đếm số lượng học sinh vắng
+    if (danh_sach_vang) {
+      const lines = String(danh_sach_vang)
+        .split(/\r?\n|;/)
+        .map(function(s) { return s.trim(); })
+        .filter(function(s) { 
+          const lower = s.toLowerCase();
+          return s.length > 0 && !lower.startsWith("không") && !lower.startsWith("ko") && !lower.startsWith("đủ") && lower !== "0"; 
+        });
+      so_hs_vang = lines.length;
     }
 
     const payload = {
@@ -157,6 +179,8 @@ function onSheetSubmit(e) {
       ma_phong: ma_phong,
       si_so: si_so,
       tinh_hinh: tinh_hinh,
+      danh_sach_vang: danh_sach_vang,
+      so_hs_vang: so_hs_vang,
       hs_vi_pham: hs_vi_pham,
       ghi_chu: ghi_chu,
       vsat_thuc_pham: vsat_thuc_pham,
@@ -200,6 +224,8 @@ function onFormSubmit(e) {
     let ca_truc = "";
     let ma_phong = "", ho_ten_gv = "";
     let si_so = "";
+    let danh_sach_vang = "";
+    let so_hs_vang = 0;
     let hs_vi_pham = "";
     let tinh_hinh = "Tốt", ghi_chu = "";
     let vsat_thuc_pham = "";
@@ -221,23 +247,27 @@ function onFormSubmit(e) {
       else if (title.includes("phòng") || title.includes("phong")) {
         ma_phong = answer;
       }
-      // 4. Sỉ số
+      // 4. Danh sách học sinh vắng
+      else if (title.includes("vắng") || title.includes("vang") || title.includes("danh sách hs vắng") || title.includes("học sinh vắng")) {
+        danh_sach_vang = answer;
+      }
+      // 5. Sỉ số
       else if (title.includes("sỉ số") || title.includes("sĩ số") || title.includes("số lượng") || title.includes("số hs")) {
         si_so = answer;
       }
-      // 5. Vi phạm nề nếp
+      // 6. Vi phạm nề nếp
       else if (title.includes("vi phạm") || title.includes("bất thường") || title.includes("quậy") || title.includes("mất trật tự") || title.includes("sự cố")) {
         hs_vi_pham = answer;
       }
-      // 6. Vệ sinh an toàn thực phẩm
+      // 7. Vệ sinh an toàn thực phẩm
       else if (title.includes("vệ sinh") || title.includes("thực phẩm") || title.includes("an toàn thực phẩm") || title.includes("vsattp")) {
         vsat_thuc_pham = answer;
       }
-      // 7. Tình hình chung / nề nếp
+      // 8. Tình hình chung / nề nếp
       else if (title.includes("tình hình") || title.includes("nề nếp") || title.includes("nền nếp") || title.includes("trật tự")) {
         tinh_hinh = answer;
       }
-      // 8. Ghi chú / Góp ý
+      // 9. Ghi chú / Góp ý
       else if (title.includes("ghi chú") || title.includes("góp ý") || title.includes("đề xuất") || title.includes("phản ánh")) {
         ghi_chu = answer;
       }
@@ -254,6 +284,18 @@ function onFormSubmit(e) {
       ca_truc = "Trực ăn";
     }
 
+    // Đếm số lượng học sinh vắng
+    if (danh_sach_vang) {
+      const lines = String(danh_sach_vang)
+        .split(/\r?\n|;/)
+        .map(function(s) { return s.trim(); })
+        .filter(function(s) { 
+          const lower = s.toLowerCase();
+          return s.length > 0 && !lower.startsWith("không") && !lower.startsWith("ko") && !lower.startsWith("đủ") && lower !== "0"; 
+        });
+      so_hs_vang = lines.length;
+    }
+
     const payload = {
       token: WEBHOOK_SECRET,
       thoi_gian_nop: thoi_gian_nop,
@@ -261,8 +303,10 @@ function onFormSubmit(e) {
       ma_phong: ma_phong,
       ho_ten_gv: ho_ten_gv,
       si_so: si_so,
-      hs_vi_pham: hs_vi_pham,
       tinh_hinh: tinh_hinh,
+      danh_sach_vang: danh_sach_vang,
+      so_hs_vang: so_hs_vang,
+      hs_vi_pham: hs_vi_pham,
       ghi_chu: ghi_chu,
       vsat_thuc_pham: vsat_thuc_pham,
       nguon: "google_form"

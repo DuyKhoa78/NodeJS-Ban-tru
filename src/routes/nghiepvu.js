@@ -203,8 +203,8 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
         let filtered = loai === 'an'
             ? data.filter(hs => hs.phong_an)
             : loai === 'ngu'
-            ? data.filter(hs => hs.phong_ngu)
-            : data;
+                ? data.filter(hs => hs.phong_ngu)
+                : data;
 
         // Nếu có truyền ngày cụ thể thì lọc các HS có hiệu lực tại ngày đó
         if (req.query.ngay) {
@@ -1992,6 +1992,113 @@ router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
+/** GET /api/baocao/hs-vang-ngay/?ngay=YYYY-MM-DD&loai=all|an|ngu&lop= */
+router.get('/api/baocao/hs-vang-ngay/', loginRequired, async (req, res) => {
+    try {
+        const { ngay, loai = 'all', lop } = req.query;
+        const targetDate = ngay || new Date().toISOString().split('T')[0];
+
+        // 1. Lọc danh sách học sinh đang học
+        const hsWhere = { dang_hoc: true };
+        if (lop) hsWhere.lop = lop;
+
+        const hsList = await HocSinh.findAll({
+            where: hsWhere,
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id', 'ngay_vao', 'ngay_rut'],
+            order: [['lop', 'ASC'], ['ho_ten', 'ASC']]
+        });
+        const hsMap = {};
+        const hsIds = [];
+        hsList.forEach(h => {
+            if (h.ngay_vao && targetDate < h.ngay_vao) return;
+            if (h.ngay_rut && targetDate > h.ngay_rut) return;
+            hsMap[h.id] = h;
+            hsIds.push(h.id);
+        });
+
+        // 2. Lấy dữ liệu điểm danh của ngày này
+        const ddRecords = await DiemDanhHS.findAll({
+            where: {
+                ngay: targetDate,
+                ma_hs_id: { [Op.in]: hsIds }
+            },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu', 'ghi_chu', 'thoi_gian_diem_danh_an', 'thoi_gian_diem_danh_ngu']
+        });
+
+        const ddMap = {};
+        ddRecords.forEach(r => {
+            ddMap[r.ma_hs_id] = r;
+        });
+
+        // 3. Lọc danh sách học sinh vắng / phép
+        let tong_vang_an = 0;
+        let tong_phep_an = 0;
+        let tong_vang_ngu = 0;
+        let tong_phep_ngu = 0;
+
+        const danh_sach = [];
+
+        hsIds.forEach(id => {
+            const hs = hsMap[id];
+            const dd = ddMap[id] || {};
+            const an = dd.diem_danh_an;
+            const ngu = dd.diem_danh_ngu;
+
+            if (an === 1) tong_vang_an++;
+            if (an === 2) tong_phep_an++;
+            if (ngu === 1) tong_vang_ngu++;
+            if (ngu === 2) tong_phep_ngu++;
+
+            let isMatch = false;
+            if (loai === 'an') {
+                isMatch = (an === 1 || an === 2);
+            } else if (loai === 'ngu') {
+                isMatch = (ngu === 1 || ngu === 2);
+            } else {
+                isMatch = (an === 1 || an === 2 || ngu === 1 || ngu === 2);
+            }
+
+            if (isMatch) {
+                danh_sach.push({
+                    id: hs.id,
+                    ho_ten: hs.ho_ten,
+                    lop: hs.lop,
+                    gioi_tinh: hs.gioi_tinh,
+                    ma_phong_an_id: hs.ma_phong_an_id,
+                    ma_phong_ngu_id: hs.ma_phong_ngu_id,
+                    diem_danh_an: an !== undefined ? an : null,
+                    diem_danh_ngu: ngu !== undefined ? ngu : null,
+                    ghi_chu: dd.ghi_chu || null,
+                    thoi_gian_diem_danh_an: dd.thoi_gian_diem_danh_an || null,
+                    thoi_gian_diem_danh_ngu: dd.thoi_gian_diem_danh_ngu || null,
+                });
+            }
+        });
+
+        // 4. Lấy cấu hình hệ thống
+        const cauhinh = await CauHinhHeThong.findByPk(1);
+
+        return res.json({
+            ok: true,
+            ngay: targetDate,
+            loai,
+            lop: lop || null,
+            nam_hoc: cauhinh?.nam_hoc || '2026-2027',
+            ten_truong: cauhinh?.ten_truong || 'LÊ THỊ HỒNG GẤM',
+            nguoi_phu_trach: cauhinh?.nguoi_phu_trach || 'Vũ Quốc Phong',
+            tong_hs: hsIds.length,
+            tong_vang_an,
+            tong_phep_an,
+            tong_vang_ngu,
+            tong_phep_ngu,
+            so_luong_loc: danh_sach.length,
+            danh_sach
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 /** GET /api/baocao/export-an/?thang=MM&nam=YYYY - Xuất báo cáo điểm danh ăn chính thức theo tháng */
 router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
     try {
@@ -2688,39 +2795,73 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
                 : (Array.isArray(req.body?.row) ? req.body.row : null));
 
         if (rawArray && rawArray.length >= 3) {
-            // Thứ tự 17 cột chuẩn (Form mới nhất):
+            // Thứ tự 18 cột chuẩn (Form mới nhất có Danh sách HS vắng):
             // 0: Dấu thời gian | 1: Ca trực
-            // Phần 3. Giám sát: 2: Họ tên | 3: Phòng ăn | 4: Tình hình nề nếp | 5: Vệ sinh an toàn thực phẩm
-            // Phần 1. Ca ăn:    6: Họ và tên giáo viên | 7: Phòng ăn | 8: Tình hình chung | 9: Sỉ số | 10: Ghi chú/Góp ý
-            // Phần 2. Ca ngủ:   11: Họ và tên | 12: Phòng ngủ | 13: Sỉ số | 14: Tình hình chung | 15: Ghi nhận HS vi phạm nề nếp (Nếu có) | 16: Ghi chú/Góp ý
+            // Phần 3. Giám sát: 2: Họ tên | 3: Vị trí/Phòng | 4: Tình hình nề nếp | 5: Vệ sinh an toàn thực phẩm
+            // Phần 1. Ca ăn:    6: Họ tên GV | 7: Phòng ăn | 8: Tình hình | 9: Sĩ số | 10: Danh sách HS vắng | 11: Ghi chú
+            // Phần 2. Ca ngủ:   12: Họ tên GV | 13: Phòng ngủ | 14: Tình hình | 15: Sĩ số | 16: Danh sách HS vắng | 17: HS vi phạm | 18: Ghi chú
             const rawCa = String(rawArray[1] || '').toLowerCase().trim();
-            const isGiamSat = rawCa.includes('giám sát') || rawCa.includes('gám sát') || rawCa.includes('giamsat') || (Boolean(rawArray[2]) && !rawArray[6] && !rawArray[11] && !rawArray[7]);
-            const is17Col = rawArray.length >= 17 || Boolean(rawArray[12]) || Boolean(rawArray[11]) || (Boolean(rawArray[6]) && Boolean(rawArray[7])) || (Boolean(rawArray[2]) && Boolean(rawArray[3]) && Boolean(rawArray[5]));
-            const is16Col = !is17Col && (rawArray.length >= 14 || Boolean(rawArray[11]) || Boolean(rawArray[10]) || (Boolean(rawArray[2]) && Boolean(rawArray[4])));
+            const isGiamSat = rawCa.includes('giám sát') || rawCa.includes('gám sát') || rawCa.includes('giamsat') || (Boolean(rawArray[2]) && !rawArray[6] && !rawArray[11] && !rawArray[12] && !rawArray[7]);
+            const is18Col = rawArray.length >= 18 || Boolean(rawArray[13]) || (Boolean(rawArray[6]) && Boolean(rawArray[10]) && Boolean(rawArray[11]));
+            const is17Col = !is18Col && (rawArray.length >= 17 || Boolean(rawArray[12]) || Boolean(rawArray[11]) || (Boolean(rawArray[6]) && Boolean(rawArray[7])) || (Boolean(rawArray[2]) && Boolean(rawArray[3]) && Boolean(rawArray[5])));
+            const is16Col = !is18Col && !is17Col && (rawArray.length >= 14 || Boolean(rawArray[11]) || Boolean(rawArray[10]) || (Boolean(rawArray[2]) && Boolean(rawArray[4])));
 
             if (isGiamSat) {
-                if (is17Col) {
+                bodyObj = {
+                    timestamp: rawArray[0],
+                    ca_truc: 'Giám sát',
+                    ho_ten_gv: rawArray[2] || '',
+                    ma_phong: rawArray[3] || 'GIÁM SÁT',
+                    tinh_hinh: rawArray[4] || 'Tốt',
+                    vsat_thuc_pham: rawArray[5] || '',
+                    ghi_chu: rawArray[5] ? ('VSATTP: ' + rawArray[5]) : '',
+                    nguon: 'google_sheet_row'
+                };
+            } else if (is18Col) {
+                const isCaNgu = rawCa.includes('ngủ') || rawCa.includes('nghi') || rawCa.includes('nghỉ') || Boolean(rawArray[12]);
+                if (isCaNgu) {
+                    const valA = String(rawArray[14] || '').trim();
+                    const valB = String(rawArray[15] || '').trim();
+                    const isNumA = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valA);
+                    const isNumB = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valB);
+                    const si_so = isNumB ? valB : (isNumA ? valA : valB);
+                    const tinh_hinh = isNumB ? (valA || 'Tốt') : (isNumA ? (valB || 'Tốt') : (valA || 'Tốt'));
+
                     bodyObj = {
                         timestamp: rawArray[0],
-                        ca_truc: 'Giám sát',
-                        ho_ten_gv: rawArray[2] || '',
-                        ma_phong: rawArray[3] || 'GIÁM SÁT',
-                        tinh_hinh: rawArray[4] || 'Tốt',
-                        vsat_thuc_pham: rawArray[5] || '',
-                        ghi_chu: rawArray[5] ? ('VSATTP: ' + rawArray[5]) : '',
+                        ca_truc: 'Trực ngủ',
+                        ho_ten_gv: rawArray[12] || '',
+                        ma_phong: rawArray[13] || '',
+                        si_so: si_so,
+                        tinh_hinh: tinh_hinh,
+                        danh_sach_vang: rawArray[16] || '',
+                        hs_vi_pham: rawArray[17] || '',
+                        ghi_chu: rawArray[18] || '',
                         nguon: 'google_sheet_row'
                     };
                 } else {
+                    const valA = String(rawArray[8] || '').trim();
+                    const valB = String(rawArray[9] || '').trim();
+                    const isNumA = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valA);
+                    const isNumB = /^(\d+[\s\/\-]*\d*|\d+)$/.test(valB);
+                    const si_so = isNumB ? valB : (isNumA ? valA : valB);
+                    const tinh_hinh = isNumB ? (valA || 'Tốt') : (isNumA ? (valB || 'Tốt') : (valA || 'Tốt'));
+
                     bodyObj = {
                         timestamp: rawArray[0],
-                        ca_truc: 'Giám sát',
-                        ho_ten_gv: rawArray[2] || '',
-                        ma_phong: 'GIÁM SÁT',
-                        tinh_hinh: rawArray[3] || 'Tốt',
-                        vsat_thuc_pham: rawArray[4] || '',
-                        ghi_chu: rawArray[4] ? ('VSATTP: ' + rawArray[4]) : '',
+                        ca_truc: 'Trực ăn',
+                        ho_ten_gv: rawArray[6] || '',
+                        ma_phong: rawArray[7] || '',
+                        si_so: si_so,
+                        tinh_hinh: tinh_hinh,
+                        danh_sach_vang: rawArray[10] || '',
+                        ghi_chu: rawArray[11] || '',
                         nguon: 'google_sheet_row'
                     };
+                }
+                if (bodyObj.danh_sach_vang) {
+                    const lines = String(bodyObj.danh_sach_vang).split(/\r?\n|;/).map(s => s.trim()).filter(s => s.length > 0 && !s.toLowerCase().startsWith('không') && !s.toLowerCase().startsWith('ko') && !s.toLowerCase().startsWith('đủ') && s !== '0');
+                    bodyObj.so_hs_vang = lines.length;
                 }
             } else if (is17Col) {
                 const isCaNgu = rawCa.includes('ngủ') || rawCa.includes('nghi') || rawCa.includes('nghỉ') || Boolean(rawArray[12]) || Boolean(rawArray[11]);
