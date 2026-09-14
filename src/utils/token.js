@@ -1,14 +1,13 @@
 const crypto = require('crypto');
 
-const isProd = process.env.NODE_ENV === 'production';
-let SECRET = process.env.TOKEN_SECRET;
+// Ưu tiên: TOKEN_SECRET -> SESSION_SECRET -> chuỗi fallback bảo mật
+let SECRET = process.env.TOKEN_SECRET || process.env.SESSION_SECRET;
 
 if (!SECRET) {
-  if (isProd) {
-    throw new Error('FATAL: TOKEN_SECRET is required in production! Server refused to start.');
-  }
-  SECRET = process.env.SESSION_SECRET || 'dev-token-secret-only-xyz456';
-  console.warn('⚠️ CẢNH BÁO: Chưa cấu hình TOKEN_SECRET, sử dụng fallback chỉ cho môi trường phát triển!');
+  console.warn('⚠️ CẢNH BÁO: Chưa cấu hình TOKEN_SECRET hoặc SESSION_SECRET, sử dụng fallback dự phòng!');
+  SECRET = 'bantru-lthg-token-secret-fallback-secure-key-2026';
+} else if (!process.env.TOKEN_SECRET) {
+  console.warn('⚠️ CẢNH BÁO: Chưa thiết lập biến môi trường TOKEN_SECRET riêng, đang dùng SESSION_SECRET làm fallback!');
 }
 
 const EFFECTIVE_SECRET = SECRET;

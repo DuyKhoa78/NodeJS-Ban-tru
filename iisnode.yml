@@ -1,0 +1,6 @@
+nodeProcessCommandLine: "node.exe"
+loggingEnabled: true
+logDirectory: iisnode
+debuggingEnabled: false
+devErrorsEnabled: true
+watchedFiles: web.config;*.js

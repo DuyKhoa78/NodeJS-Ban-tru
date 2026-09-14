@@ -164,6 +164,19 @@ app.use(errorHandler);
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 async function startServer() {
+  // 1. Khởi động lắng nghe HTTP ngay lập tức để iisnode / Azure App Service không bị timeout 500
+  const isNamedPipe = typeof PORT === 'string' && PORT.startsWith('\\\\.\\pipe\\');
+  if (isNamedPipe) {
+    app.listen(PORT, () => {
+      console.log(`🚀 Server đang chạy trên Azure named pipe: ${PORT}`);
+    });
+  } else {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server đang chạy tại http://0.0.0.0:${PORT} (Local: http://localhost:${PORT})`);
+    });
+  }
+
+  // 2. Kết nối DB và chạy migration bất đồng bộ phía sau
   try {
     console.log('🔄 Đang kết nối cơ sở dữ liệu...');
     await sequelize.authenticate();
@@ -183,11 +196,6 @@ async function startServer() {
     console.error('⚠️  Lỗi kết nối database:', err.message);
     console.error('   Kiểm tra lại DATABASE_URL trong file .env');
   }
-
-  // Khởi động lắng nghe HTTP sau khi đã chuẩn bị database
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server đang chạy tại http://0.0.0.0:${PORT} (Local: http://localhost:${PORT})`);
-  });
 }
 
 startServer();

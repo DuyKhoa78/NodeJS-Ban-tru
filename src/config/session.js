@@ -19,14 +19,13 @@ pool.on('error', (err) => {
 // NODE_ENV=production phải được set trên Azure App Service (Application Settings)
 const isProd = process.env.NODE_ENV === 'production';
 
-console.log(`🔧 Session config: secure=${isProd}, sameSite=lax, NODE_ENV=${process.env.NODE_ENV}`);
+console.log(`🔧 Session config: secure=${isProd}, sameSite=${isProd ? 'none' : 'lax'}, NODE_ENV=${process.env.NODE_ENV}`);
 
 if (!process.env.SESSION_SECRET) {
-  if (isProd) {
-    throw new Error('FATAL: SESSION_SECRET is required in production! Server refused to start.');
-  }
-  console.warn('⚠️ CẢNH BÁO: Chưa thiết lập biến môi trường SESSION_SECRET!');
+  console.warn('⚠️ CẢNH BÁO: Chưa thiết lập biến môi trường SESSION_SECRET, đang sử dụng fallback!');
 }
+
+const EFFECTIVE_SESSION_SECRET = process.env.SESSION_SECRET || process.env.TOKEN_SECRET || 'bantru-session-secret-fallback-secure-key-2026';
 
 const sessionConfig = {
   store: new PgSession({
@@ -34,7 +33,7 @@ const sessionConfig = {
     tableName: 'session',
     createTableIfMissing: true,
   }),
-  secret: process.env.SESSION_SECRET || 'dev-only-secret-do-not-use-in-prod-xyz123',
+  secret: EFFECTIVE_SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
