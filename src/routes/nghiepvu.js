@@ -926,9 +926,27 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         }
 
         const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
-        const allStudents = await HocSinh.findAll({
-            where: { [fieldPhong]: ma_phong_id, dang_hoc: true }
+        const dbStudents = await HocSinh.findAll({
+            where: {
+                [fieldPhong]: ma_phong_id,
+                [Op.or]: [
+                    { dang_hoc: true },
+                    { ngay_rut: { [Op.gte]: ngay } }
+                ]
+            }
         });
+
+        // Kết hợp với danh_sach_hs do client gửi lên (bảo đảm học sinh tạm/đặc biệt không bị bỏ sót)
+        const studentMap = new Map();
+        dbStudents.forEach(s => studentMap.set(s.id, { id: s.id, ho_ten: s.ho_ten, lop: s.lop }));
+        if (Array.isArray(danh_sach_hs)) {
+            danh_sach_hs.forEach(item => {
+                if (!studentMap.has(item.id)) {
+                    studentMap.set(item.id, item);
+                }
+            });
+        }
+        const allStudents = Array.from(studentMap.values());
 
         // Kiểm tra các bạn đã được báo Phép trước (bởi Admin)
         const existingDD = await DiemDanhHS.findAll({
