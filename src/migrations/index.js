@@ -50,6 +50,16 @@ const migrations = [
         ALTER TABLE "nghiepvu_baocaotruc" ADD COLUMN IF NOT EXISTS "vsat_thuc_pham" TEXT;
       `).catch(() => {});
     }
+  },
+  {
+    id: '20260914_add_ten_gv_truc_thay_to_phancongtrucgv',
+    async up(sequelize) {
+      await sequelize.query(`
+        ALTER TABLE "nghiepvu_phancongtrucgv" ADD COLUMN IF NOT EXISTS "ten_gv_truc_thay" VARCHAR(255);
+      `).catch(err => {
+        console.warn('Migration 20260914_add_ten_gv_truc_thay warning:', err.message);
+      });
+    }
   }
 ];
 

@@ -34,6 +34,23 @@ function addDays(dateStr, n) {
 }
 function toDate(str) { return new Date(str).toISOString().split('T')[0]; }
 
+/** Điều kiện lọc ca trực mà giáo viên gvId thực tế đang chịu trách nhiệm (bao gồm trực thay, loại trừ ca đã có người khác trực thay) */
+function getTeacherActiveDutyCondition(gvId) {
+    return {
+        [Op.or]: [
+            { ma_gv_truc_thay_id: gvId },
+            {
+                ma_gv_id: gvId,
+                ma_gv_truc_thay_id: null,
+                [Op.or]: [
+                    { ten_gv_truc_thay: null },
+                    { ten_gv_truc_thay: '' }
+                ]
+            }
+        ]
+    };
+}
+
 /** ─── WEEK CONFIG ─── */
 
 /** GET /api/lichtruc/config-tuan/?tuan= */
@@ -634,10 +651,12 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             return res.status(404).json({ ok: false, error: 'Không tìm thấy hồ sơ giáo viên liên kết với tài khoản này' });
         }
 
-        // Lấy danh sách phân công của giáo viên
+        // Lấy danh sách phân công của giáo viên (chỉ lấy ca trực thực tế đảm nhiệm)
         let whereClause = { ngay: targetNgay };
         if (req.user.role === 'giao_vien') {
-            whereClause[Op.or] = [{ ma_gv_id: gvId }, { ma_gv_truc_thay_id: gvId }];
+            whereClause[Op.and] = [
+                getTeacherActiveDutyCondition(gvId)
+            ];
         }
 
         let assignments = await PhanCongTrucGV.findAll({
@@ -780,7 +799,7 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
                     ngay,
                     loai_truc: loaiTrucNum,
                     ma_phong_id,
-                    [Op.or]: [{ ma_gv_id: gvId }, { ma_gv_truc_thay_id: gvId }]
+                    ...getTeacherActiveDutyCondition(gvId)
                 }
             });
             if (!pc) {
@@ -835,7 +854,7 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
                     ngay,
                     loai_truc: loaiTrucNum,
                     ma_phong_id,
-                    [Op.or]: [{ ma_gv_id: gvId }, { ma_gv_truc_thay_id: gvId }]
+                    ...getTeacherActiveDutyCondition(gvId)
                 }
             });
             if (!pc) {
@@ -914,7 +933,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                     ngay,
                     loai_truc: loaiTrucNum,
                     ma_phong_id,
-                    [Op.or]: [{ ma_gv_id: gvId }, { ma_gv_truc_thay_id: gvId }]
+                    ...getTeacherActiveDutyCondition(gvId)
                 }
             });
             if (!pc) {
@@ -1491,7 +1510,7 @@ router.get('/api/lichtruc/day/', loginRequired, async (req, res) => {
 });
 
 /** POST /api/lichtruc/diem-danh/ - Cập nhật trạng thái điểm danh cho 1 ca */
-router.post('/api/lichtruc/diem-danh/', loginRequired, async (req, res) => {
+router.post('/api/lichtruc/diem-danh/', loginRequired, roleRequired('admin', 'quan_ly', 'hoc_vu'), async (req, res) => {
     try {
         const { id, xac_nhan_truc } = req.body;
         if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id phân công' });
@@ -1512,7 +1531,7 @@ router.post('/api/lichtruc/diem-danh/', loginRequired, async (req, res) => {
 });
 
 /** POST /api/lichtruc/diem-danh-all/ - Điểm danh tất cả có mặt trong ngày/ca */
-router.post('/api/lichtruc/diem-danh-all/', loginRequired, async (req, res) => {
+router.post('/api/lichtruc/diem-danh-all/', loginRequired, roleRequired('admin', 'quan_ly', 'hoc_vu'), async (req, res) => {
     try {
         const { ngay, xac_nhan_truc = true, loai_truc } = req.body;
         if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu ngày' });
@@ -1538,7 +1557,7 @@ router.post('/api/lichtruc/diem-danh-all/', loginRequired, async (req, res) => {
 });
 
 /** POST /api/lichtruc/huy-truc-thay/ - Hủy trực thay, đưa ca về lại giáo viên ban đầu */
-router.post('/api/lichtruc/huy-truc-thay/', loginRequired, async (req, res) => {
+router.post('/api/lichtruc/huy-truc-thay/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
     try {
         const { id } = req.body;
         if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id phân công' });
