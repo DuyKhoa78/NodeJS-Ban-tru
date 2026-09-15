@@ -1487,7 +1487,7 @@ router.post('/admin/lichtruc/:pk/xoa/', loginRequired, roleRequired('admin', 'qu
 });
 
 /** GET /api/lichtruc/day/?ngay=YYYY-MM-DD - Lấy danh sách phân công trực theo ngày cho điểm danh */
-router.get('/api/lichtruc/day/', loginRequired, async (req, res) => {
+router.get('/api/lichtruc/day/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
     try {
         const ngay = req.query.ngay || new Date().toISOString().split('T')[0];
         const records = await PhanCongTrucGV.findAll({
@@ -1510,7 +1510,7 @@ router.get('/api/lichtruc/day/', loginRequired, async (req, res) => {
 });
 
 /** POST /api/lichtruc/diem-danh/ - Cập nhật trạng thái điểm danh cho 1 ca */
-router.post('/api/lichtruc/diem-danh/', loginRequired, roleRequired('admin', 'quan_ly', 'hoc_vu'), async (req, res) => {
+router.post('/api/lichtruc/diem-danh/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
     try {
         const { id, xac_nhan_truc } = req.body;
         if (!id) return res.status(400).json({ ok: false, error: 'Thiếu id phân công' });
@@ -1531,7 +1531,7 @@ router.post('/api/lichtruc/diem-danh/', loginRequired, roleRequired('admin', 'qu
 });
 
 /** POST /api/lichtruc/diem-danh-all/ - Điểm danh tất cả có mặt trong ngày/ca */
-router.post('/api/lichtruc/diem-danh-all/', loginRequired, roleRequired('admin', 'quan_ly', 'hoc_vu'), async (req, res) => {
+router.post('/api/lichtruc/diem-danh-all/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
     try {
         const { ngay, xac_nhan_truc = true, loai_truc } = req.body;
         if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu ngày' });
