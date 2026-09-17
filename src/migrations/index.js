@@ -60,6 +60,18 @@ const migrations = [
         console.warn('Migration 20260914_add_ten_gv_truc_thay warning:', err.message);
       });
     }
+  },
+  {
+    id: '20260915_fix_ho_quan_thinh_to_ho_quang_thinh',
+    async up(sequelize) {
+      await sequelize.query(`
+        UPDATE "nghiepvu_baocaotruc"
+        SET "ho_ten_gv" = 'Hồ Quang Thịnh'
+        WHERE "ho_ten_gv" ILIKE '%Quan Thịnh%';
+      `).catch(err => {
+        console.warn('Migration 20260915_fix_ho_quan_thinh_to_ho_quang_thinh warning:', err.message);
+      });
+    }
   }
 ];
 

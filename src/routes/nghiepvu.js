@@ -209,7 +209,16 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
         // Nếu có truyền ngày cụ thể thì lọc các HS có hiệu lực tại ngày đó
         if (req.query.ngay) {
             const d = req.query.ngay;
-            filtered = filtered.filter(hs => (!hs.ngay_vao || hs.ngay_vao <= d) && (!hs.ngay_rut || hs.ngay_rut >= d));
+            filtered = filtered.filter(hs => {
+                if (hs.ngay_vao && hs.ngay_vao > d) return false;
+                if (hs.ngay_rut && hs.ngay_rut < d) return false;
+                if (!hs.ngay_rut && !hs.dang_hoc) return false;
+                return true;
+            });
+        }
+
+        if (req.query.active_only === 'true' || req.query.dang_hoc === 'true' || req.query.active === 'true' || req.query.active === '1') {
+            filtered = filtered.filter(hs => hs.dang_hoc !== false);
         }
 
         return res.json({ ok: true, hocsinh: filtered });
@@ -490,9 +499,23 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
                 recordMap.set(`${r.ma_hs_id}_${r.ngay}`, r);
             });
 
+            const hsRecords = await HocSinh.findAll({
+                where: { id: { [Op.in]: ma_hs_list } },
+                attributes: ['id', 'dang_hoc', 'ngay_vao', 'ngay_rut'],
+                transaction: t,
+            });
+            const hsMap = new Map(hsRecords.map(h => [h.id, h]));
+
             let count = 0;
             for (const ma_hs of ma_hs_list) {
+                const hsInfo = hsMap.get(ma_hs);
                 for (const d of dates) {
+                    // Bỏ qua học sinh đã rút bán trú hoặc chưa vào học
+                    if (hsInfo) {
+                        if (hsInfo.dang_hoc === false && (!hsInfo.ngay_rut || d > hsInfo.ngay_rut)) continue;
+                        if (hsInfo.ngay_rut && d > hsInfo.ngay_rut) continue;
+                        if (hsInfo.ngay_vao && d < hsInfo.ngay_vao) continue;
+                    }
                     const key = `${ma_hs}_${d}`;
                     const rec = recordMap.get(key);
 
@@ -2338,11 +2361,11 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
  */
 router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
     try {
-        const { thang, nam, lop } = req.query;
+        const { thang, nam, lop, tu_ngay, den_ngay, dot } = req.query;
         const year = parseInt(nam) || new Date().getFullYear();
         const month = parseInt(thang) || (new Date().getMonth() + 1);
-        const start = `${year}-${String(month).padStart(2, '0')}-01`;
-        const end = new Date(year, month, 0).toISOString().split('T')[0];
+        const start = tu_ngay || `${year}-${String(month).padStart(2, '0')}-01`;
+        const end = den_ngay || new Date(year, month, 0).toISOString().split('T')[0];
 
         // 1. Ngày bán trú ăn & ngủ
         const [pcAn, pcNgu] = await Promise.all([
@@ -2403,10 +2426,15 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
             ddMap[r.ma_hs_id][r.ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
         });
 
-        // 5. Giá ăn/ngủ từ cấu hình giá
-        const giaConfig = await CauHinhGia.findOne({ order: [['id', 'DESC']] });
-        const giaAn = giaConfig?.don_gia_an || 0;
-        const giaNgu = giaConfig?.don_gia_ngu || 0;
+        // 5. Giá ăn từ Thiết lập hệ thống (hoặc từ tham số query nếu có)
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({
+            where: { id: 1 },
+            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách', tien_an: 35000 }
+        });
+        const defaultTienAn = cauhinh?.tien_an || 35000;
+        const customGiaAn = req.query.don_gia_an !== undefined ? parseFloat(req.query.don_gia_an) : null;
+        const giaAn = (customGiaAn !== null && !isNaN(customGiaAn)) ? customGiaAn : defaultTienAn;
+        const giaNgu = 0;
 
         // 6. Tính toán từng HS
         const data = hsList.map(hs => {
@@ -2475,15 +2503,12 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
             };
         });
 
-        // 7. Cấu hình hệ thống
-        const [cauhinh] = await CauHinhHeThong.findOrCreate({
-            where: { id: 1 },
-            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách' }
-        });
 
         return res.json({
             ok: true,
             so_thang: month, so_nam: year,
+            dot: dot || null,
+            tu_ngay: start, den_ngay: end,
             tong_buoi_an: ngayAn.length, tong_buoi_ngu: ngayNgu.length,
             gia_an: giaAn, gia_ngu: giaNgu,
             nam_hoc: cauhinh.nam_hoc,
@@ -2491,6 +2516,214 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
             data,
         });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+});
+
+/**
+ * GET /api/baocao/suat-an-thang/?thang=MM&nam=YYYY
+ * Báo cáo tổng hợp số lượng suất ăn hàng ngày theo tháng cho bên cung cấp suất ăn bán trú
+ */
+router.get('/api/baocao/suat-an-thang/', loginRequired, async (req, res) => {
+    try {
+        const { thang, nam, tu_ngay, den_ngay } = req.query;
+        const year = parseInt(nam) || new Date().getFullYear();
+        const month = parseInt(thang) || (new Date().getMonth() + 1);
+        const pMonth = String(month).padStart(2, '0');
+        const lastDayNum = new Date(year, month, 0).getDate();
+
+        // Xác định khoảng thời gian báo cáo: hỗ trợ chu kỳ tuần có ngày từ tháng cũ (vd: bắt đầu từ 30/09 cho tháng 10)
+        const start = (tu_ngay && /^\d{4}-\d{2}-\d{2}$/.test(tu_ngay))
+            ? tu_ngay
+            : `${year}-${pMonth}-01`;
+        const end = (den_ngay && /^\d{4}-\d{2}-\d{2}$/.test(den_ngay))
+            ? den_ngay
+            : `${year}-${pMonth}-${String(lastDayNum).padStart(2, '0')}`;
+
+        // 1. Lấy các ngày có bán trú trong khoảng [start, end] từ PhanCongTrucGV (loai_truc: 0) và DiemDanhHS (diem_danh_an)
+        const [pcAn, ddDates, cauhinhNgayList] = await Promise.all([
+            PhanCongTrucGV.findAll({
+                where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+                attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+                raw: true,
+            }),
+            DiemDanhHS.findAll({
+                where: {
+                    ngay: { [Op.between]: [start, end] },
+                    diem_danh_an: { [Op.ne]: null }
+                },
+                attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+                raw: true,
+            }),
+            CauHinhNgay.findAll({
+                where: { ngay: { [Op.between]: [start, end] } },
+            }),
+        ]);
+
+        const cauhinhNgayMap = {};
+        cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+
+        const dateSet = new Set();
+        pcAn.forEach(r => { if (r.ngay) dateSet.add(r.ngay); });
+        ddDates.forEach(r => { if (r.ngay) dateSet.add(r.ngay); });
+
+        // Nếu chưa có lịch phân công hoặc điểm danh, tự động lấy các ngày trong tuần (T2 - T6) không bị cấu hình nghỉ
+        if (dateSet.size === 0) {
+            let curr = new Date(start + 'T00:00:00');
+            const stop = new Date(end + 'T00:00:00');
+            while (curr <= stop) {
+                const dow = curr.getDay();
+                const curY = curr.getFullYear();
+                const curM = String(curr.getMonth() + 1).padStart(2, '0');
+                const curD = String(curr.getDate()).padStart(2, '0');
+                const dStr = `${curY}-${curM}-${curD}`;
+                if (dow >= 1 && dow <= 5) {
+                    if (!cauhinhNgayMap[dStr] || !cauhinhNgayMap[dStr].is_nghi) {
+                        dateSet.add(dStr);
+                    }
+                }
+                curr.setDate(curr.getDate() + 1);
+            }
+        }
+
+        // Lọc bỏ những ngày cấu hình toàn trường nghỉ (is_nghi = true)
+        const activeDates = Array.from(dateSet).filter(dStr => {
+            return !(cauhinhNgayMap[dStr] && cauhinhNgayMap[dStr].is_nghi);
+        }).sort();
+
+        // 2. Lấy danh sách học sinh ăn bán trú trong khoảng thời gian [start, end]
+        const hsList = await HocSinh.findAll({
+            where: {
+                [Op.and]: [
+                    {
+                        [Op.or]: [
+                            { dang_hoc: true },
+                            { ngay_rut: { [Op.gte]: start } },
+                        ]
+                    },
+                    {
+                        [Op.or]: [
+                            { ngay_vao: null },
+                            { ngay_vao: { [Op.lte]: end } },
+                        ]
+                    }
+                ]
+            },
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'dang_hoc', 'ngay_vao', 'ngay_rut', 'ma_phong_an_id'],
+            order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+        });
+
+        // Chỉ xét những học sinh có đăng ký ăn bán trú (có ma_phong_an_id hoặc nếu không phân phòng ăn thì tất cả hs bán trú)
+        const hasAnyPhongAn = hsList.some(h => h.ma_phong_an_id);
+        const lunchStudents = hasAnyPhongAn ? hsList.filter(h => h.ma_phong_an_id) : hsList;
+        const lunchHsIds = lunchStudents.map(h => h.id);
+
+        // 3. Lấy bản ghi điểm danh ăn trong khoảng [start, end]
+        const ddRecords = await DiemDanhHS.findAll({
+            where: {
+                ma_hs_id: { [Op.in]: lunchHsIds },
+                ngay: { [Op.between]: [start, end] },
+            },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'ghi_chu'],
+        });
+
+        const ddMap = {}; // { 'YYYY-MM-DD': { hsId: { an: 0|1|2, ghi_chu: string } } }
+        ddRecords.forEach(r => {
+            if (!ddMap[r.ngay]) ddMap[r.ngay] = {};
+            ddMap[r.ngay][r.ma_hs_id] = { an: r.diem_danh_an, ghi_chu: r.ghi_chu };
+        });
+
+        // 4. Tính toán cho từng ngày
+        const days = activeDates.map((ngayStr, idx) => {
+            const d = new Date(ngayStr + 'T00:00:00');
+            const dayNum = d.getDate();
+            const monthNum = d.getMonth() + 1;
+            const itemYear = d.getFullYear();
+            const ngayFormatted = `${String(dayNum).padStart(2, '0')}/${String(monthNum).padStart(2, '0')}/${itemYear}`;
+
+            // Danh sách HS hợp lệ trong ngày này
+            const cfg = cauhinhNgayMap[ngayStr] || null;
+            const validHs = lunchStudents.filter(hs => {
+                if (hs.ngay_vao && ngayStr < hs.ngay_vao) return false;
+                if (hs.ngay_rut && ngayStr > hs.ngay_rut) return false;
+                return isHsAllowed(hs, cfg);
+            });
+
+            const dayDD = ddMap[ngayStr] || {};
+            let hsPhep = 0;
+            let hsVang = 0;
+            let hsCoMat = 0;
+            let hsChuaDD = 0;
+
+            validHs.forEach(hs => {
+                const rec = dayDD[hs.id];
+                if (rec && rec.an !== null && rec.an !== undefined) {
+                    if (rec.an === 2) hsPhep++;
+                    else if (rec.an === 1) hsVang++;
+                    else if (rec.an === 0) hsCoMat++;
+                } else {
+                    hsChuaDD++;
+                }
+            });
+
+            // Số lượng suất ăn = Tổng HS ăn hợp lệ - Số HS vắng có phép
+            const hasAttendance = (hsPhep + hsVang + hsCoMat) > 0;
+            const slSuatAn = hasAttendance ? (validHs.length - hsPhep) : validHs.length;
+
+            let ghiChu = '';
+            if (cfg?.mo_ta) {
+                ghiChu = cfg.mo_ta;
+            }
+
+            return {
+                stt: idx + 1,
+                ngay: ngayStr,
+                ngay_format: ngayFormatted,
+                sl_suat_an: slSuatAn,
+                hs_phep: hsPhep,
+                hs_vang: hsVang,
+                hs_co_mat: hsCoMat,
+                tong_dang_ky: validHs.length,
+                da_diem_danh: hasAttendance,
+                ghi_chu: ghiChu,
+            };
+        });
+
+        // 5. Cấu hình hệ thống & thông tin người ký
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({
+            where: { id: 1 },
+            defaults: { nam_hoc: '2026-2027', ten_truong: 'TRƯỜNG THPT LÊ THI HỒNG GẤM', nguoi_phu_trach: 'Mai Quỳnh Châu' }
+        });
+
+        const rawTen = cauhinh.ten_truong || 'LÊ THỊ HỒNG GẤM';
+        const formattedTenTruong = (rawTen.includes('TRƯỜNG') || rawTen.includes('TRUNG TÂM'))
+            ? rawTen
+            : `TRƯỜNG THPT ${rawTen}`;
+
+        const tongSuatAn = days.reduce((sum, d) => sum + Number(d.sl_suat_an || 0), 0);
+        const tongPhep = days.reduce((sum, d) => sum + Number(d.hs_phep || 0), 0);
+
+        return res.json({
+            ok: true,
+            thang: month,
+            nam: year,
+            thang_str: `${String(month).padStart(2, '0')}/${year}`,
+            tu_ngay: start,
+            den_ngay: end,
+            nam_hoc: cauhinh.nam_hoc || '2026-2027',
+            so_gd: 'SỞ GIÁO DỤC VÀ ĐÀO TẠO TP. HỒ CHÍ MINH',
+            ten_truong: formattedTenTruong,
+            bo_phan: 'BỘ PHẬN BÁN TRÚ',
+            nguoi_lap_bang: 'Mai Quỳnh Châu',
+            dai_dien_cong_ty: 'Lê Thị Ngọc Bích',
+            giam_doc: 'Vũ Quốc Phong',
+            dia_danh: 'Thành phố Hồ Chí Minh',
+            days,
+            tong_suat_an: tongSuatAn,
+            tong_phep: tongPhep,
+        });
+    } catch (err) {
+        console.error('Error suat-an-thang:', err);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 /** GET /api/baocao/luong-gv/?tu_ngay=&den_ngay=&thang=&nam= */
@@ -3028,6 +3261,13 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             );
         }
 
+        // Chuẩn hóa tên giáo viên nếu sai chính tả trên form (Quan -> Quang: Hồ Quang Thịnh)
+        if (typeof ho_ten_gv_raw === 'string') {
+            if (/hồ\s*quan\s*thịnh/i.test(ho_ten_gv_raw) || /^quan\s*thịnh$/i.test(ho_ten_gv_raw.trim())) {
+                ho_ten_gv_raw = 'Hồ Quang Thịnh';
+            }
+        }
+
         if (!ma_phong_raw || !ho_ten_gv_raw) {
             return res.status(400).json({
                 ok: false,
@@ -3163,6 +3403,11 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             if (matchedTeacher) {
                 hoTenChuan = matchedTeacher.ho_ten;
             }
+        }
+
+        // Đảm bảo họ tên chuẩn xác khi lưu vào CSDL (Quan -> Quang: Hồ Quang Thịnh)
+        if (/hồ\s*quan\s*thịnh/i.test(hoTenChuan) || /^quan\s*thịnh$/i.test(hoTenChuan)) {
+            hoTenChuan = 'Hồ Quang Thịnh';
         }
 
         const record = await BaoCaoTruc.create({

@@ -1047,7 +1047,7 @@ router.get('/api/public/system-status/', async (req, res) => {
 /** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri } */
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
-    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri } = req.body;
+    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri, tien_an } = req.body;
     const updateData = {
       id: 1,
       nam_hoc,
@@ -1055,6 +1055,7 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
       ten_truong,
       ngay_cap_nhat: new Date().toISOString().split('T')[0],
     };
+    if (tien_an !== undefined) updateData.tien_an = Math.max(0, parseInt(tien_an) || 0);
     if (ma_bao_mat_gv !== undefined) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
     
     // Chỉ duy nhất Super Admin mới có quyền cấu hình chế độ bảo trì
@@ -1066,7 +1067,7 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
     }
 
     await CauHinhHeThong.upsert(updateData);
-    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Bảo trì=${updateData.bao_tri !== undefined ? (updateData.bao_tri ? 'BẬT' : 'TẮT') : 'Không đổi'}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
+    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Tiền ăn=${updateData.tien_an !== undefined ? updateData.tien_an.toLocaleString('vi-VN') + 'đ' : 'Không đổi'}, Bảo trì=${updateData.bao_tri !== undefined ? (updateData.bao_tri ? 'BẬT' : 'TẮT') : 'Không đổi'}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

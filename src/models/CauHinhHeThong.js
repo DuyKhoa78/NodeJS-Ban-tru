@@ -43,6 +43,11 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
     defaultValue: 'Dự kiến hoàn tất trong 15-30 phút',
     comment: 'Thời gian dự kiến bảo trì',
   },
+  tien_an: {
+    type: DataTypes.INTEGER,
+    defaultValue: 35000,
+    comment: 'Tiền ăn bán trú học sinh (đồng/suất/ngày)',
+  },
 }, {
   tableName: 'core_cauhinhhethong',
   timestamps: false,
