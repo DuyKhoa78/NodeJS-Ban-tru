@@ -135,6 +135,70 @@ router.get('/api/hocsinh/export-pdf-data/', loginRequired, roleRequired('admin',
   }
 });
 
+function escapeCsvValue(val) {
+  if (val === null || val === undefined) return '';
+  const str = String(val).trim();
+  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+/** GET /api/hocsinh/export-csv/ - Xuất toàn bộ học sinh đang tham gia bán trú ra file CSV */
+router.get('/api/hocsinh/export-csv/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { lop, dang_hoc } = req.query;
+    const where = {};
+    if (lop) where.lop = lop;
+    // Mặc định xuất học sinh đang bán trú (dang_hoc === true) trừ khi truyền dang_hoc === 'all'
+    if (dang_hoc !== 'all') {
+      where.dang_hoc = true;
+    }
+
+    const list = await HocSinh.findAll({
+      where,
+      include: [
+        { association: 'phong_an', attributes: ['ma_phong', 'loai_phong'] },
+        { association: 'phong_ngu', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] },
+      ],
+      order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
+    });
+
+    const header = '\uFEFFSTT,Mã BT,Họ và tên,Giới tính,Lớp,Phòng ăn,Phòng ngủ,Ngày vào,Trạng thái,Ghi chú\n';
+    const rows = list.map((hs, i) => {
+      const gt = hs.gioi_tinh === 0 ? 'Nam' : 'Nữ';
+      const pa = hs.phong_an?.ma_phong || hs.ma_phong_an_id || '';
+      const pn = hs.phong_ngu?.ma_phong || hs.ma_phong_ngu_id || '';
+      const tt = hs.dang_hoc ? 'Đang học' : 'Rút bán trú';
+      let ngayVao = '';
+      if (hs.ngay_vao) {
+        const parts = String(hs.ngay_vao).slice(0, 10).split('-');
+        ngayVao = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : hs.ngay_vao;
+      }
+      return [
+        i + 1,
+        escapeCsvValue(hs.id),
+        escapeCsvValue(hs.ho_ten),
+        gt,
+        escapeCsvValue(hs.lop),
+        escapeCsvValue(pa),
+        escapeCsvValue(pn),
+        escapeCsvValue(ngayVao),
+        tt,
+        escapeCsvValue(hs.ghi_chu || '')
+      ].join(',');
+    }).join('\n');
+
+    const today = new Date().toISOString().slice(0, 10);
+    const filename = lop ? `Danh_Sach_HS_Ban_Tru_Lop_${lop}_${today}.csv` : `Danh_Sach_Toan_Bo_HS_Dang_Ban_Tru_${today}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    return res.send(header + rows);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 /** GET /api/hocsinh/download-pdf/:filename - Tải file PDF lưu trữ trên máy chủ nếu có */
 router.get('/api/hocsinh/download-pdf/:filename', loginRequired, (req, res) => {
   const filename = path.basename(req.params.filename);
@@ -252,6 +316,8 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
       return res.status(400).json({ ok: false, error: 'File CSV rỗng hoặc không có dữ liệu.' });
     }
 
+    const updateExisting = req.body.update_existing === 'true' || req.body.update_existing === true || req.body.update_existing === '1';
+
     if (rows.length > 3000) {
       return res.status(400).json({ ok: false, error: 'File vượt quá giới hạn tối đa 3.000 dòng. Vui lòng chia nhỏ file để import an toàn.' });
     }
@@ -290,7 +356,8 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
       lop: 4,
       phong_ngu: 5,
       phong_an: 6,
-      ghi_chu: 7
+      ghi_chu: 7,
+      ngay_vao: -1,
     };
 
     let startIdx = 0;
@@ -308,6 +375,7 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
         else if (col.includes('lớp')) { colMap.lop = idx; foundLopHeader = true; }
         else if (col.includes('ngủ')) colMap.phong_ngu = idx;
         else if (col.includes('ăn')) colMap.phong_an = idx;
+        else if (col.includes('ngày vào') || col.includes('ngay vao')) colMap.ngay_vao = idx;
         else if (col.includes('ghi chú')) colMap.ghi_chu = idx;
       });
 
@@ -321,6 +389,8 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
     }
 
     let success = 0;
+    let createdCount = 0;
+    let updatedCount = 0;
     const errors = [];
 
     for (let i = startIdx; i < rows.length; i++) {
@@ -354,8 +424,8 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
 
       // Kiểm tra trùng mã BT
       const existing = await HocSinh.findOne({ where: { id: idHS } });
-      if (existing) {
-        errors.push({ row: rowNum, msg: `Mã BT ${idHS} (${existing.ho_ten}) đã tồn tại trong hệ thống` });
+      if (existing && !updateExisting) {
+        errors.push({ row: rowNum, msg: `Mã BT ${idHS} (${existing.ho_ten}) đã tồn tại trong hệ thống (Bật tùy chọn Cập nhật để cập nhật phòng/thông tin)` });
         continue;
       }
 
@@ -394,31 +464,77 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
         }
       }
 
-      // Thêm vào DB — dùng ID từ CSV làm primary key
-      try {
-        await HocSinh.create({
-          id:              idHS,
-          ho_ten:          String(ho_ten).trim(),
-          gioi_tinh,
-          lop:             String(lop).trim().toUpperCase(),
-          ma_phong_an_id,
-          ma_phong_ngu_id,
-          ghi_chu:         ghi_chu ? String(ghi_chu).trim() : null,
-          dang_hoc:        true,
-        });
+      // Ngày vào: lấy từ CSV nếu có, nếu không thì tính mặc định
+      let finalNgayVao = getDefaultNgayVaoVN();
+      const ngay_vao_raw = colMap.ngay_vao >= 0 ? row[colMap.ngay_vao] : null;
+      if (ngay_vao_raw && String(ngay_vao_raw).trim()) {
+        const nv = String(ngay_vao_raw).trim();
+        if (nv.includes('/')) {
+          const p = nv.split('/');
+          if (p.length === 3) {
+            const yr = p[2].length === 2 ? '20' + p[2] : p[2];
+            finalNgayVao = `${yr}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}`;
+          }
+        } else if (nv.includes('-')) {
+          finalNgayVao = nv.slice(0, 10);
+        }
+      }
 
-        success++;
-        // Ghi cảnh báo phòng (không phải lỗi, chỉ thông báo)
-        if (warns.length > 0) {
-          errors.push({ row: rowNum, msg: `Mã BT ${ma_so_bt} (${String(ho_ten).trim()}): đã thêm thành công nhưng lưu ý — ${warns.join('; ')}` });
+      if (existing) {
+        // Cập nhật học sinh đã có
+        try {
+          const updateData = {
+            ho_ten: String(ho_ten).trim(),
+            lop: String(lop).trim().toUpperCase(),
+            gioi_tinh,
+            ma_phong_an_id,
+            ma_phong_ngu_id,
+          };
+          if (ghi_chu !== undefined && ghi_chu !== null) {
+            updateData.ghi_chu = String(ghi_chu).trim() || null;
+          }
+          if (colMap.ngay_vao >= 0 && ngay_vao_raw) {
+            updateData.ngay_vao = finalNgayVao;
+          }
+          await existing.update(updateData);
+          updatedCount++;
+          success++;
+
+          if (warns.length > 0) {
+            errors.push({ row: rowNum, msg: `Mã BT ${idHS} (${String(ho_ten).trim()}): đã cập nhật phòng/thông tin nhưng lưu ý — ${warns.join('; ')}` });
+          }
+        } catch (updateErr) {
+          errors.push({ row: rowNum, msg: `Mã BT ${idHS}: Lỗi khi cập nhật — ${updateErr.message}` });
         }
-      } catch (createErr) {
-        // Dịch lỗi FK sang tiếng Việt
-        let errMsg = createErr.message;
-        if (errMsg.includes('foreign key') || errMsg.includes('violates')) {
-          errMsg = 'Dữ liệu phòng hoặc khóa ngoại không hợp lệ';
+      } else {
+        // Thêm vào DB — dùng ID từ CSV làm primary key
+        try {
+          await HocSinh.create({
+            id:              idHS,
+            ho_ten:          String(ho_ten).trim(),
+            gioi_tinh,
+            lop:             String(lop).trim().toUpperCase(),
+            ma_phong_an_id,
+            ma_phong_ngu_id,
+            ghi_chu:         ghi_chu ? String(ghi_chu).trim() : null,
+            dang_hoc:        true,
+            ngay_vao:        finalNgayVao,
+          });
+
+          createdCount++;
+          success++;
+          // Ghi cảnh báo phòng (không phải lỗi, chỉ thông báo)
+          if (warns.length > 0) {
+            errors.push({ row: rowNum, msg: `Mã BT ${ma_so_bt} (${String(ho_ten).trim()}): đã thêm thành công nhưng lưu ý — ${warns.join('; ')}` });
+          }
+        } catch (createErr) {
+          // Dịch lỗi FK sang tiếng Việt
+          let errMsg = createErr.message;
+          if (errMsg.includes('foreign key') || errMsg.includes('violates')) {
+            errMsg = 'Dữ liệu phòng hoặc khóa ngoại không hợp lệ';
+          }
+          errors.push({ row: rowNum, msg: `Mã BT ${ma_so_bt}: Lỗi khi thêm — ${errMsg}` });
         }
-        errors.push({ row: rowNum, msg: `Mã BT ${ma_so_bt}: Lỗi khi thêm — ${errMsg}` });
       }
     }
 
@@ -431,11 +547,20 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
       console.error('Lỗi sync sequence sau khi import CSV:', seqErr);
     }
 
+    await recordAuditLog(req, 'IMPORT_CSV_HOCSINH', `Import CSV: Thêm mới ${createdCount} HS, Cập nhật ${updatedCount} HS`);
     invalidateStaticCaches();
     if (success === 0 && errors.length > 0) {
-      return res.status(400).json({ ok: false, error: 'Không thể import học sinh do dữ liệu có lỗi.', total: rows.length, success: 0, errors });
+      return res.status(400).json({ ok: false, error: 'Không thể import học sinh do dữ liệu có lỗi.', total: rows.length, success: 0, created: 0, updated: 0, errors });
     }
-    return res.json({ ok: true, total: rows.length, success, errors });
+    return res.json({
+      ok: true,
+      message: `Đã xử lý xong: thêm mới ${createdCount} học sinh, cập nhật ${updatedCount} học sinh.`,
+      total: rows.length,
+      success,
+      created: createdCount,
+      updated: updatedCount,
+      errors
+    });
   } catch (err) {
     return res.status(500).json({ ok: false, error: `Lỗi xử lý file CSV: ${err.message}` });
   }
