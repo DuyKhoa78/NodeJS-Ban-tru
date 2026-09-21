@@ -592,15 +592,20 @@ router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), as
       }
     }
 
-    // Đếm ca trực tháng hiện tại
+    // Đếm ca trực tháng hiện tại tính đến thời điểm hiện tại
+    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
     const now = new Date();
     const startMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     const endMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    const effectiveEndMonth = endMonth > todayVN ? todayVN : endMonth;
 
-    const caThang = await PhanCongTrucGV.findAll({
-      where: { ngay: { [Op.between]: [startMonth, endMonth] }, xac_nhan_truc: true },
-      attributes: ['ma_gv_id', 'ngay', 'loai_truc'],
-    });
+    let caThang = [];
+    if (startMonth <= effectiveEndMonth) {
+      caThang = await PhanCongTrucGV.findAll({
+        where: { ngay: { [Op.between]: [startMonth, effectiveEndMonth] }, xac_nhan_truc: true },
+        attributes: ['ma_gv_id', 'ngay', 'loai_truc'],
+      });
+    }
     const caMap = {};
     const seenCa = new Set();
     caThang.forEach(c => {

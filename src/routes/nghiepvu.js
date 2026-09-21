@@ -2804,16 +2804,26 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
             end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
         }
 
-        const phanCong = await PhanCongTrucGV.findAll({
-            where: {
-                ngay: { [Op.between]: [start, end] },
-                xac_nhan_truc: { [Op.ne]: false }, // Chỉ tính các ca có mặt trực thực tế
-            },
-            include: [
-                { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
-                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
-            ],
-        });
+        // Lấy ngày hiện tại theo giờ Việt Nam
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+        // Giới hạn tính toán: Chỉ tính công thực tế đến thời điểm hiện tại (ngay <= todayVN),
+        // các ngày tương lai/chưa tới không được tự động gán công vào
+        const effectiveEnd = end > todayVN ? todayVN : end;
+
+        let phanCong = [];
+        if (start <= effectiveEnd) {
+            phanCong = await PhanCongTrucGV.findAll({
+                where: {
+                    ngay: { [Op.between]: [start, effectiveEnd] },
+                    xac_nhan_truc: { [Op.ne]: false }, // Chỉ tính các ca có mặt trực thực tế
+                },
+                include: [
+                    { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
+                    { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
+                ],
+            });
+        }
 
         const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
         const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
@@ -2921,6 +2931,8 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
             data: Object.values(gvMap),
             don_gia_an,
             don_gia_ngu,
+            today: todayVN,
+            effective_end: effectiveEnd,
             quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
             ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
         });
