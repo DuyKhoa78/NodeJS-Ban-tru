@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const { Op } = require('sequelize');
 const NodeCache = require('node-cache');
 const { HocSinh, DiemDanhHS, CauHinhHeThong, PhanCongTrucGV, CauHinhTuan, CauHinhNgay } = require('../models');
@@ -57,21 +59,28 @@ router.get('/api/the-ban-tru/danh-sach', loginRequired, roleRequired('admin', 'h
       defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' },
     });
 
+    const avatarsDir = path.resolve(__dirname, '../../uploads/avatars');
+
     return res.json({
       ok: true,
       nam_hoc: ch.nam_hoc || '2026-2027',
       total: list.length,
       classes: classes.map((c) => c.lop),
-      students: list.map((h) => ({
-        id: `26${String(h.id).padStart(3, '0')}`,
-        raw_id: h.id,
-        name: (h.ho_ten || '').trim().toUpperCase(),
-        lop: (h.lop || '').trim(),
-        gt: h.gioi_tinh, // 0 = Nam, 1 = Nữ
-        an: h.ma_phong_an_id || 'Chưa xếp',
-        ngu: h.ma_phong_ngu_id || 'Chưa xếp',
-        photo: '/user.jpg',
-      })),
+      students: list.map((h) => {
+        const hasAvatar = fs.existsSync(path.join(avatarsDir, `${h.id}.jpg`));
+        const avatarUrl = hasAvatar ? `/uploads/avatars/${h.id}.jpg` : null;
+        return {
+          id: `26${String(h.id).padStart(3, '0')}`,
+          raw_id: h.id,
+          name: (h.ho_ten || '').trim().toUpperCase(),
+          lop: (h.lop || '').trim(),
+          gt: h.gioi_tinh, // 0 = Nam, 1 = Nữ
+          an: h.ma_phong_an_id || 'Chưa xếp',
+          ngu: h.ma_phong_ngu_id || 'Chưa xếp',
+          avatar_url: avatarUrl,
+          photo: avatarUrl || '/user.jpg',
+        };
+      }),
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

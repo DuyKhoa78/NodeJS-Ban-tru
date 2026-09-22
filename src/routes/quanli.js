@@ -304,6 +304,13 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
     if (content.charCodeAt(0) === 0xFEFF) {
       content = content.slice(1);
     }
+    // Bỏ qua dòng chỉ thị delimiter sep= nếu có (do Excel xuất hoặc người dùng thêm)
+    if (content.startsWith('sep=')) {
+      const firstNewline = content.indexOf('\n');
+      if (firstNewline !== -1) {
+        content = content.slice(firstNewline + 1);
+      }
+    }
 
     let rows;
     try {

@@ -16,12 +16,20 @@ router.use(attachUser);
 router.get('/api/taikhoan/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
     const { GiaoVien } = require('../models');
+    const { getDailyTeacherAvatar } = require('../utils/teacherAvatar');
     const users = await StaffUser.findAll({
       attributes: { exclude: ['password'] },
       include: [{ model: GiaoVien, as: 'giao_vien', attributes: ['id', 'ho_ten'] }],
       order: [['id', 'ASC']],
     });
-    return res.json({ ok: true, users });
+    const mappedUsers = users.map((u) => {
+      const plain = u.toJSON();
+      if (plain.role === 'giao_vien' && (!plain.avatar_url || plain.avatar_url.match(/^\/gv\d+\.(jpg|png)$/))) {
+        plain.avatar_url = getDailyTeacherAvatar(plain.id);
+      }
+      return plain;
+    });
+    return res.json({ ok: true, users: mappedUsers });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -34,7 +42,7 @@ router.get('/api/taikhoan/', loginRequired, roleRequired('admin'), async (req, r
  */
 router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
-    const { id, username, fullname, position, role, is_active, password, giao_vien_id } = req.body;
+    const { id, username, fullname, position, role, is_active, password, giao_vien_id, avatar_url } = req.body;
     const currentUser = req.user || req.session?.user;
 
     if (!username) return res.status(400).json({ ok: false, error: 'Username không được để trống' });
@@ -72,14 +80,19 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
         return res.status(400).json({ ok: false, error: 'Username đã tồn tại' });
       }
 
-      await user.update({
+      const updateData = {
         username,
         fullname,
         position,
         role: user.is_superuser ? 'admin' : role,
         giao_vien_id: gvId,
         is_active: user.is_superuser ? true : is_active,
-      });
+      };
+      if (avatar_url !== undefined) {
+        updateData.avatar_url = avatar_url;
+      }
+
+      await user.update(updateData);
 
       invalidateUserCache(user.id);
       await user.increment('token_version', { by: 1 }).catch(() => {});

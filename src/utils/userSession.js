@@ -1,3 +1,5 @@
+const { getDailyTeacherAvatar } = require('./teacherAvatar');
+
 /**
  * Xây dựng object sessionUser đầy đủ các thuộc tính và permission flags
  */
@@ -16,6 +18,11 @@ function buildSessionUser(user) {
     giao_vien: 'Giáo viên trực',
   };
 
+  let avatarUrl = user.avatar_url || null;
+  if (isGiaoVien && (!avatarUrl || avatarUrl.match(/^\/gv\d+\.(jpg|png)$/))) {
+    avatarUrl = getDailyTeacherAvatar(user.id || user.username);
+  }
+
   return {
     id:                   user.id,
     username:             user.username,
@@ -25,7 +32,7 @@ function buildSessionUser(user) {
     role_display:         roleDisplayMap[user.role] || user.role,
     giao_vien_id:         user.giao_vien_id || null,
     email:                user.email || '',
-    avatar_url:           user.avatar_url || null,
+    avatar_url:           avatarUrl,
     is_active:            Boolean(user.is_active),
     is_superuser:         Boolean(user.is_superuser),
 

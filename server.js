@@ -104,6 +104,9 @@ app.use(['/login', '/login/', '/api/login', '/api/auth/login', '/api/profile/sen
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ─── Phục vụ file tĩnh (Ảnh thẻ học sinh, uploads) ──────────────────────────────
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
@@ -192,6 +195,16 @@ async function startServer() {
 
     isDbReady = true;
     console.log('✅ Hệ thống DB và các trường sẵn sàng!');
+
+    // 3. Đồng bộ ảnh đại diện ngẫu nhiên hàng ngày cho tài khoản giáo viên (GV0 đến GV15)
+    const { syncDailyTeacherAvatars } = require('./src/utils/teacherAvatar');
+    const { StaffUser } = require('./src/models');
+    await syncDailyTeacherAvatars(StaffUser);
+
+    // Chu kỳ kiểm tra mỗi 1 giờ để tự động đổi ngẫu nhiên sang ảnh mới khi bước sang ngày tiếp theo
+    setInterval(() => {
+      syncDailyTeacherAvatars(StaffUser);
+    }, 60 * 60 * 1000);
   } catch (err) {
     console.error('⚠️  Lỗi kết nối database:', err.message);
     console.error('   Kiểm tra lại DATABASE_URL trong file .env');
