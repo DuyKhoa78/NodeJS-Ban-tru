@@ -268,9 +268,151 @@ function getVietnamTime(dateObj = new Date()) {
 }
 
 async function checkAndAutoRescueRooms(targetNgay) {
-    // Tắt hoàn toàn tự động chốt vắng vì nhà trường chưa triển khai quét mã QR.
-    // Tránh việc hệ thống tự động ghi vắng tất cả học sinh khi điểm danh thủ công.
-    return;
+    try {
+        const vn = getVietnamTime();
+        const isToday = targetNgay === vn.todayStr;
+        const isPastDate = targetNgay < vn.todayStr;
+
+        if (!isToday && !isPastDate) {
+            // Ngày trong tương lai -> không tự động chốt
+            return;
+        }
+
+        // Xác định ca nào đã quá giờ:
+        // Ca Ăn kết thúc lúc 11h35 (695 phút)
+        // Ca Ngủ kết thúc lúc 12h05 (725 phút)
+        const eligibleLoais = [];
+        if (isPastDate) {
+            eligibleLoais.push(0, 1);
+        } else if (isToday) {
+            if (vn.totalMins > 695) eligibleLoais.push(0);
+            if (vn.totalMins > 725) eligibleLoais.push(1);
+        }
+
+        if (eligibleLoais.length === 0) return;
+
+        for (const loaiTrucNum of eligibleLoais) {
+            const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
+            const fieldStatus = loaiTrucNum === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
+            const fieldPhuongThuc = loaiTrucNum === 0 ? 'phuong_thuc_an' : 'phuong_thuc_ngu';
+            const fieldThoiGian = loaiTrucNum === 0 ? 'thoi_gian_diem_danh_an' : 'thoi_gian_diem_danh_ngu';
+
+            // Tìm các phân công trực của ca này
+            const phanCongs = await PhanCongTrucGV.findAll({
+                where: { ngay: targetNgay, loai_truc: loaiTrucNum },
+                attributes: ['ma_phong_id']
+            });
+            const assignedRooms = [...new Set(phanCongs.map(p => p.ma_phong_id))];
+
+            for (const ma_phong of assignedRooms) {
+                // Kiểm tra xem phòng này đã chốt chưa
+                const existingChot = await DiemDanhPhong.findOne({
+                    where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: ma_phong }
+                });
+
+                if (existingChot && (existingChot.trang_thai_chot === 'da_chot' || existingChot.da_diem_danh)) {
+                    continue; // Phòng đã hoàn tất chốt sổ
+                }
+
+                // Kiểm tra xem phòng có dữ liệu nháp draft không
+                const draft = await DiemDanhDraft.findOne({
+                    where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: ma_phong }
+                });
+
+                // Lấy tất cả HS của phòng
+                const hsList = await HocSinh.findAll({
+                    where: {
+                        [fieldPhong]: ma_phong,
+                        [Op.or]: [
+                            { dang_hoc: true },
+                            { ngay_rut: { [Op.gte]: targetNgay } }
+                        ]
+                    }
+                });
+
+                if (hsList.length === 0) continue;
+
+                // Lấy các điểm danh đã có trong DB
+                const existingDD = await DiemDanhHS.findAll({
+                    where: {
+                        ngay: targetNgay,
+                        ma_hs_id: { [Op.in]: hsList.map(h => h.id) }
+                    }
+                });
+                const existingMap = {};
+                existingDD.forEach(d => { existingMap[d.ma_hs_id] = d; });
+
+                const draftItemsMap = {};
+                if (draft && Array.isArray(draft.danh_sach_hs)) {
+                    draft.danh_sach_hs.forEach(item => {
+                        draftItemsMap[item.id] = item;
+                    });
+                }
+
+                const recordsToSave = [];
+                for (const hs of hsList) {
+                    const ex = existingMap[hs.id];
+                    const dr = draftItemsMap[hs.id];
+
+                    // Nếu đã được báo Phép trước (2), giữ nguyên
+                    if (ex && ex[fieldStatus] === 2) {
+                        continue;
+                    }
+
+                    let finalStatus = 1; // Mặc định Vắng nếu không chốt và chưa quét
+                    let phuongThuc = 'auto_he_thong_lay_ve';
+                    let thoiGian = new Date();
+
+                    if (dr && dr.status !== undefined) {
+                        finalStatus = dr.status;
+                        phuongThuc = dr.phuong_thuc || 'qr';
+                        thoiGian = dr.time || dr.scanned_at || new Date();
+                    } else if (ex && ex[fieldStatus] !== null && ex[fieldStatus] !== undefined) {
+                        finalStatus = ex[fieldStatus];
+                        phuongThuc = ex[fieldPhuongThuc] || 'thu_cong';
+                        thoiGian = ex[fieldThoiGian] || new Date();
+                    }
+
+                    recordsToSave.push({
+                        ma_hs_id: hs.id,
+                        ngay: targetNgay,
+                        [fieldStatus]: finalStatus,
+                        [fieldPhuongThuc]: phuongThuc,
+                        [fieldThoiGian]: thoiGian,
+                        ghi_chu: 'Hệ thống tự động thu thập (GV không chốt sổ)'
+                    });
+                }
+
+                const t = await sequelize.transaction();
+                try {
+                    if (recordsToSave.length > 0) {
+                        await DiemDanhHS.bulkCreate(recordsToSave, {
+                            updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'ghi_chu'],
+                            transaction: t
+                        });
+                    }
+
+                    await DiemDanhPhong.upsert({
+                        ma_phong_id: ma_phong,
+                        ngay: targetNgay,
+                        loai_truc: loaiTrucNum,
+                        da_diem_danh: true,
+                        thoi_gian: new Date(),
+                        trang_thai_chot: 'da_chot',
+                        ma_gv_chot_id: null, // Hệ thống tự động thu thập
+                        ghi_chu_chot: 'Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực'
+                    }, { transaction: t });
+
+                    await t.commit();
+                } catch (saveErr) {
+                    await t.rollback();
+                    console.error(`Lỗi khi tự động thu thập phòng ${ma_phong}:`, saveErr.message);
+                }
+            }
+        }
+    } catch (e) {
+        console.error('checkAndAutoRescueRooms error:', e.message);
+    }
 }
 
 /** GET /api/diemdanh/?ngay=&loai= */
@@ -395,7 +537,7 @@ function isHsAllowed(hs, cauhinhNgay) {
 }
 
 /** POST /api/diemdanh/save/ */
-router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'), async (req, res) => {
+router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu', 'giao_vien'), async (req, res) => {
     try {
         const { loai, records } = req.body;
         if (!records || !Array.isArray(records) || records.length === 0) {
@@ -406,19 +548,36 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
 
         // Kiểm tra quyền và khung giờ điểm danh:
         // Admin/Superuser có thể điểm danh bất kỳ lúc nào.
-        // Học vụ (hoc_vu) chỉ được điểm danh trong khung giờ từ 11:00 đến 14:00.
         const isSpecialAdmin = Boolean(req.user?.is_admin || req.user?.is_superuser);
         if (!isSpecialAdmin) {
-            const now = new Date();
-            const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
-            const [vnHour, vnMinute] = timeStr.split(':').map(Number);
-            const totalMins = vnHour * 60 + vnMinute;
-            // 11h00 = 660 mins, 14h00 = 840 mins
-            if (totalMins < 660 || totalMins > 840) {
-                return res.status(400).json({
-                    ok: false,
-                    error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 11:00 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.'
-                });
+            const vn = getVietnamTime();
+
+            if (req.user.role === 'giao_vien') {
+                // Ràng buộc nghiêm ngặt ngày hôm nay:
+                if (reqNgay !== vn.todayStr) {
+                    return res.status(403).json({
+                        ok: false,
+                        error: `Giáo viên chỉ được phép lưu điểm danh trong ngày hôm nay (${vn.todayStr}). Các ngày đã qua hoặc sắp tới không được thao tác.`
+                    });
+                }
+                // Ràng buộc khung giờ: Ăn (10h55 - 11h35: 655 - 695), Ngủ (11h30 - 12h05: 690 - 725)
+                const startMins = loai === 'an' ? 655 : 690;
+                const endMins = loai === 'an' ? 695 : 725;
+                const timeLabel = loai === 'an' ? '10h55 – 11h35' : '11h30 – 12h05';
+                if (vn.totalMins < startMins || vn.totalMins > endMins) {
+                    return res.status(403).json({
+                        ok: false,
+                        error: `Ngoài khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} (${timeLabel}). Sau thời gian này Giáo viên không được thao tác.`
+                    });
+                }
+            } else if (req.user.role === 'hoc_vu') {
+                // Học vụ chỉ được điểm danh trong khung giờ từ 11:00 đến 14:00 (660 - 840)
+                if (vn.totalMins < 660 || vn.totalMins > 840) {
+                    return res.status(400).json({
+                        ok: false,
+                        error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 11:00 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.'
+                    });
+                }
             }
         }
 
@@ -735,16 +894,18 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
                 : 0;
 
             // Khung giờ điểm danh:
-            // Ăn: 10:55 (655) -> 11:30 (690)
-            // Ngủ: 11:30 (690) -> 12:00 (720)
+            // Ăn: 10:55 (655) -> 11:35 (695)
+            // Ngủ: 11:30 (690) -> 12:05 (725)
             const startMins = loaiTruc === 0 ? 655 : 690;
-            const endMins = loaiTruc === 0 ? 690 : 720;
+            const endMins = loaiTruc === 0 ? 695 : 725;
             const startStr = loaiTruc === 0 ? '10:55' : '11:30';
-            const endStr = loaiTruc === 0 ? '11:30' : '12:00';
+            const endStr = loaiTruc === 0 ? '11:35' : '12:05';
 
             let timeState = 'sap_den'; // 'sap_den' | 'dang_dien_ra' | 'da_qua_gio'
             if (isTestDate) {
                 timeState = 'dang_dien_ra';
+            } else if (targetNgay !== vn.todayStr) {
+                timeState = 'da_qua_gio';
             } else {
                 if (vn.totalMins < startMins) timeState = 'sap_den';
                 else if (vn.totalMins <= endMins) timeState = 'dang_dien_ra';
@@ -812,6 +973,16 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
 
         // Kiểm tra phân công nếu là giáo viên
         if (req.user.role === 'giao_vien') {
+            const vn = getVietnamTime();
+            if (ngay !== vn.todayStr) {
+                return res.status(403).json({ ok: false, error: 'Giáo viên chỉ được phép điểm danh trong ngày hôm nay.' });
+            }
+            const startMins = loaiTrucNum === 0 ? 655 : 690;
+            const endMins = loaiTrucNum === 0 ? 695 : 725;
+            if (vn.totalMins < startMins || vn.totalMins > endMins) {
+                return res.status(403).json({ ok: false, error: 'Ngoài khung giờ điểm danh quy định. Hệ thống đã khóa thao tác.' });
+            }
+
             let gvId = req.user.giao_vien_id;
             if (!gvId) {
                 const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
@@ -926,24 +1097,22 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         // Nếu là giáo viên, kiểm tra khung giờ và phân công nhiệm vụ
         if (req.user.role === 'giao_vien') {
             const startMins = loaiTrucNum === 0 ? 655 : 690;
-            const endMins = loaiTrucNum === 0 ? 690 : 720;
-            const timeLabel = loaiTrucNum === 0 ? '10h55 - 11h30' : '11h30 - 12h00';
+            const endMins = loaiTrucNum === 0 ? 695 : 725;
+            const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h35' : '11h30 – 12h05';
 
-            // Cho phép kiểm thử với ngày test 2026-09-10 hoặc môi trường dev
-            const isTestMode = ngay === '2026-09-10' || process.env.NODE_ENV !== 'production';
+            // Chỉ cho phép điểm danh ngày hôm nay
+            if (ngay !== vn.todayStr) {
+                return res.status(403).json({
+                    ok: false,
+                    error: `Giáo viên chỉ có thể chốt sổ trong ngày trực hôm nay (${vn.todayStr}). Các ngày đã qua hoặc sắp tới không được thao tác.`
+                });
+            }
 
-            if (!isTestMode) {
-                // Chỉ cho phép điểm danh ngày hôm nay
-                if (ngay !== vn.todayStr) {
-                    return res.status(400).json({ ok: false, error: 'Giáo viên chỉ có thể điểm danh trong ngày trực hôm nay.' });
-                }
-
-                if (vn.totalMins < startMins || vn.totalMins > endMins) {
-                    return res.status(400).json({
-                        ok: false,
-                        error: `Ngoài khung giờ điểm danh của ca (${timeLabel}). Hiện tại: ${vn.timeStr}.`
-                    });
-                }
+            if (vn.totalMins < startMins || vn.totalMins > endMins) {
+                return res.status(403).json({
+                    ok: false,
+                    error: `Ngoài khung giờ chốt sổ của ca (${timeLabel}). Sau thời gian này Giáo viên không được thao tác.`
+                });
             }
 
             let gvId = req.user.giao_vien_id;
@@ -1235,6 +1404,12 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
 
             const isCompleted = ps?.trang_thai_chot === 'da_chot' || Boolean(ps?.da_diem_danh);
 
+            let tenGvChot = null;
+            if (ps?.ma_gv_chot_id) {
+                const u = await StaffUser.findByPk(ps.ma_gv_chot_id, { attributes: ['ho_ten', 'username'] });
+                tenGvChot = u?.ho_ten || u?.username || null;
+            }
+
             result.push({
                 ma_phong,
                 phong: item.phong,
@@ -1244,8 +1419,10 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
                 trang_thai_chot: isCompleted ? 'da_chot' : 'chua_chot',
                 thoi_gian_chot: ps?.thoi_gian || null,
                 ghi_chu_chot: ps?.ghi_chu_chot || null,
+                ma_gv_chot_id: ps?.ma_gv_chot_id || null,
+                ten_gv_chot: tenGvChot,
                 draft_count: draftCount,
-                stats: isCompleted ? { comat, vang, phep, chua_diem_danh: 0 } : null
+                stats: { comat, vang, phep, chua_diem_danh: Math.max(0, totalHs - (comat + vang + phep)) }
             });
         }
 
