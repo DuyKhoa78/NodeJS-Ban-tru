@@ -279,13 +279,13 @@ async function checkAndAutoRescueRooms(targetNgay) {
         }
 
         // Xác định ca nào đã quá giờ:
-        // Ca Ăn kết thúc lúc 11h35 (695 phút)
+        // Ca Ăn kết thúc lúc 11h30 (690 phút)
         // Ca Ngủ kết thúc lúc 12h05 (725 phút)
         const eligibleLoais = [];
         if (isPastDate) {
             eligibleLoais.push(0, 1);
         } else if (isToday) {
-            if (vn.totalMins > 695) eligibleLoais.push(0);
+            if (vn.totalMins > 690) eligibleLoais.push(0);
             if (vn.totalMins > 725) eligibleLoais.push(1);
         }
 
@@ -584,10 +584,10 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                         error: `Giáo viên chỉ được phép lưu điểm danh trong ngày hôm nay (${vn.todayStr}). Các ngày đã qua hoặc sắp tới không được thao tác.`
                     });
                 }
-                // Ràng buộc khung giờ: Ăn (10h55 - 11h35: 655 - 695), Ngủ (11h30 - 12h05: 690 - 725)
+                // Ràng buộc khung giờ: Ăn (10h55 - 11h30: 655 - 690), Ngủ (11h30 - 12h05: 690 - 725)
                 const startMins = loai === 'an' ? 655 : 690;
-                const endMins = loai === 'an' ? 695 : 725;
-                const timeLabel = loai === 'an' ? '10h55 – 11h35' : '11h30 – 12h05';
+                const endMins = loai === 'an' ? 690 : 725;
+                const timeLabel = loai === 'an' ? '10h55 – 11h30' : '11h30 – 12h05';
                 if (vn.totalMins < startMins || vn.totalMins > endMins) {
                     return res.status(403).json({
                         ok: false,
@@ -918,12 +918,12 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
                 : 0;
 
             // Khung giờ điểm danh:
-            // Ăn: 10:55 (655) -> 11:35 (695)
+            // Ăn: 10:55 (655) -> 11:30 (690)
             // Ngủ: 11:30 (690) -> 12:05 (725)
             const startMins = loaiTruc === 0 ? 655 : 690;
-            const endMins = loaiTruc === 0 ? 695 : 725;
+            const endMins = loaiTruc === 0 ? 690 : 725;
             const startStr = loaiTruc === 0 ? '10:55' : '11:30';
-            const endStr = loaiTruc === 0 ? '11:35' : '12:05';
+            const endStr = loaiTruc === 0 ? '11:30' : '12:05';
 
             let timeState = 'sap_den'; // 'sap_den' | 'dang_dien_ra' | 'da_qua_gio'
             if (isTestDate) {
@@ -1002,7 +1002,7 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
                 return res.status(403).json({ ok: false, error: 'Giáo viên chỉ được phép điểm danh trong ngày hôm nay.' });
             }
             const startMins = loaiTrucNum === 0 ? 655 : 690;
-            const endMins = loaiTrucNum === 0 ? 695 : 725;
+            const endMins = loaiTrucNum === 0 ? 690 : 725;
             if (vn.totalMins < startMins || vn.totalMins > endMins) {
                 return res.status(403).json({ ok: false, error: 'Ngoài khung giờ điểm danh quy định. Hệ thống đã khóa thao tác.' });
             }
@@ -1121,8 +1121,8 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         // Nếu là giáo viên, kiểm tra khung giờ và phân công nhiệm vụ
         if (req.user.role === 'giao_vien') {
             const startMins = loaiTrucNum === 0 ? 655 : 690;
-            const endMins = loaiTrucNum === 0 ? 695 : 725;
-            const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h35' : '11h30 – 12h05';
+            const endMins = loaiTrucNum === 0 ? 690 : 725;
+            const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
 
             // Chỉ cho phép điểm danh ngày hôm nay
             if (ngay !== vn.todayStr) {
