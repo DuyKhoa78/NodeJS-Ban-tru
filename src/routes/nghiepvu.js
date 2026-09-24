@@ -435,8 +435,32 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
 
         // Lấy trạng thái chốt của các phòng trong ca này
         const loaiTrucQuery = loai === 'ngu' ? 1 : 0;
-        const phongStatuses = await DiemDanhPhong.findAll({
-            where: { ngay: ngayFilter, loai_truc: loaiTrucQuery }
+        const rawPhongStatuses = await DiemDanhPhong.findAll({
+            where: { ngay: ngayFilter, loai_truc: loaiTrucQuery },
+            include: [{
+                model: StaffUser,
+                as: 'nguoi_chot',
+                attributes: ['id', 'username', 'fullname', 'role', 'giao_vien_id'],
+                include: [{
+                    model: GiaoVien,
+                    as: 'giao_vien',
+                    attributes: ['id', 'ho_ten']
+                }]
+            }]
+        });
+
+        const phongStatuses = rawPhongStatuses.map(ps => {
+            const item = ps.toJSON ? ps.toJSON() : ps;
+            let tenNguoiChot = null;
+            if (item.nguoi_chot) {
+                tenNguoiChot = item.nguoi_chot.fullname || item.nguoi_chot.giao_vien?.ho_ten || item.nguoi_chot.username;
+            } else if (item.ma_gv_chot_id === null && (item.trang_thai_chot === 'da_chot' || item.da_diem_danh)) {
+                tenNguoiChot = 'Hệ thống';
+            }
+            return {
+                ...item,
+                ten_nguoi_chot: tenNguoiChot
+            };
         });
 
         // Nếu là giáo viên, xác định phòng được phân công
@@ -1406,8 +1430,8 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
 
             let tenGvChot = null;
             if (ps?.ma_gv_chot_id) {
-                const u = await StaffUser.findByPk(ps.ma_gv_chot_id, { attributes: ['ho_ten', 'username'] });
-                tenGvChot = u?.ho_ten || u?.username || null;
+                const u = await StaffUser.findByPk(ps.ma_gv_chot_id, { attributes: ['fullname', 'username'] });
+                tenGvChot = u?.username || u?.fullname || null;
             }
 
             result.push({
@@ -2670,11 +2694,13 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
         // 5. Giá ăn từ Thiết lập hệ thống (hoặc từ tham số query nếu có)
         const [cauhinh] = await CauHinhHeThong.findOrCreate({
             where: { id: 1 },
-            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách', tien_an: 35000 }
+            defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách', tien_an: 38000 }
         });
-        const defaultTienAn = cauhinh?.tien_an || 35000;
-        const customGiaAn = req.query.don_gia_an !== undefined ? parseFloat(req.query.don_gia_an) : null;
-        const giaAn = (customGiaAn !== null && !isNaN(customGiaAn)) ? customGiaAn : defaultTienAn;
+        const defaultTienAn = cauhinh?.tien_an || 38000;
+        const customGiaAn = (req.query.don_gia_an !== undefined && req.query.don_gia_an !== '' && req.query.don_gia_an !== 'null')
+            ? parseFloat(req.query.don_gia_an)
+            : null;
+        const giaAn = (customGiaAn !== null && !isNaN(customGiaAn) && customGiaAn > 0) ? customGiaAn : defaultTienAn;
         const giaNgu = 0;
 
         // 6. Tính toán từng HS
@@ -4048,6 +4074,49 @@ router.post('/api/baocaotruc/delete-range/', loginRequired, async (req, res) => 
 
         const count = await BaoCaoTruc.destroy({ where });
         return res.json({ ok: true, message: `Đã xóa thành công ${count} lượt báo cáo`, count });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/**
+ * POST /api/baocaotruc/update/
+ * Chỉnh sửa 1 bản ghi báo cáo trực (CHỈ SUPER ADMIN)
+ */
+router.post('/api/baocaotruc/update/', loginRequired, async (req, res) => {
+    try {
+        const user = req.user || req.session?.user;
+        const isSuper = Boolean(user && (user.is_superuser === true || user.role === 'super_admin'));
+        if (!isSuper) {
+            return res.status(403).json({ ok: false, error: 'Chỉ Super Admin mới có quyền chỉnh sửa báo cáo trực để đảm bảo tính công bằng và minh bạch.' });
+        }
+
+        const {
+            id, ngay, ca_truc, ma_phong, ho_ten_gv,
+            si_so, so_hs_vang, danh_sach_vang,
+            hs_vi_pham, tinh_hinh, ghi_chu, vsat_thuc_pham
+        } = req.body;
+
+        if (!id) return res.status(400).json({ ok: false, error: 'Thiếu ID bản ghi báo cáo' });
+
+        const record = await BaoCaoTruc.findByPk(id);
+        if (!record) return res.status(404).json({ ok: false, error: 'Không tìm thấy bản ghi báo cáo' });
+
+        if (ngay !== undefined) record.ngay = ngay;
+        if (ca_truc !== undefined) record.ca_truc = parseInt(ca_truc, 10);
+        if (ma_phong !== undefined) record.ma_phong = String(ma_phong).trim();
+        if (ho_ten_gv !== undefined) record.ho_ten_gv = String(ho_ten_gv).trim();
+        if (si_so !== undefined) record.si_so = si_so !== null ? String(si_so).trim() : null;
+        if (so_hs_vang !== undefined) record.so_hs_vang = parseInt(so_hs_vang, 10) || 0;
+        if (danh_sach_vang !== undefined) record.danh_sach_vang = danh_sach_vang !== null ? String(danh_sach_vang).trim() : null;
+        if (hs_vi_pham !== undefined) record.hs_vi_pham = hs_vi_pham !== null ? String(hs_vi_pham).trim() : null;
+        if (tinh_hinh !== undefined) record.tinh_hinh = tinh_hinh !== null ? String(tinh_hinh).trim() : null;
+        if (ghi_chu !== undefined) record.ghi_chu = ghi_chu !== null ? String(ghi_chu).trim() : null;
+        if (vsat_thuc_pham !== undefined) record.vsat_thuc_pham = vsat_thuc_pham !== null ? String(vsat_thuc_pham).trim() : null;
+
+        await record.save();
+
+        return res.json({ ok: true, message: 'Đã cập nhật bản ghi báo cáo thành công', record });
     } catch (err) {
         return res.status(500).json({ ok: false, error: err.message });
     }

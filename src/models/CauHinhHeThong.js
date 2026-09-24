@@ -45,7 +45,7 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
   },
   tien_an: {
     type: DataTypes.INTEGER,
-    defaultValue: 35000,
+    defaultValue: 38000,
     comment: 'Tiền ăn bán trú học sinh (đồng/suất/ngày)',
   },
 }, {

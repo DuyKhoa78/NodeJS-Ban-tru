@@ -48,6 +48,10 @@ HocSinh.hasMany(DiemDanhHS, { foreignKey: 'ma_hs_id', as: 'diem_danh' });
 DiemDanhPhong.belongsTo(Phong, { foreignKey: 'ma_phong_id', as: 'phong' });
 Phong.hasMany(DiemDanhPhong, { foreignKey: 'ma_phong_id', as: 'diem_danh_phong' });
 
+// DiemDanhPhong ↔ StaffUser
+DiemDanhPhong.belongsTo(StaffUser, { foreignKey: 'ma_gv_chot_id', as: 'nguoi_chot' });
+StaffUser.hasMany(DiemDanhPhong, { foreignKey: 'ma_gv_chot_id', as: 'phong_da_chot' });
+
 // DiemDanhDraft ↔ Phong
 DiemDanhDraft.belongsTo(Phong, { foreignKey: 'ma_phong_id', as: 'phong' });
 Phong.hasMany(DiemDanhDraft, { foreignKey: 'ma_phong_id', as: 'draft_diem_danh' });
