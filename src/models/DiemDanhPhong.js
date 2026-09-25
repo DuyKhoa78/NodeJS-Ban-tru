@@ -8,7 +8,7 @@ const DiemDanhPhong = sequelize.define('DiemDanhPhong', {
     autoIncrement: true,
   },
   ma_phong_id: {
-    type: DataTypes.STRING(4),
+    type: DataTypes.STRING(10),
     allowNull: false,
     references: { model: 'quanli_phong', key: 'ma_phong' },
   },

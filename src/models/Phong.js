@@ -3,7 +3,7 @@ const sequelize = require('../../src/config/database');
 
 const Phong = sequelize.define('Phong', {
   ma_phong: {
-    type: DataTypes.STRING(4),
+    type: DataTypes.STRING(10),
     primaryKey: true,
   },
   loai_phong: {

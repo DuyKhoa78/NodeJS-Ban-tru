@@ -6,7 +6,7 @@ const NodeCache = require('node-cache');
 const {
     HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong, DiemDanhDraft,
     PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
-    BaoCaoTruc
+    BaoCaoTruc, LichSuPhanPhong
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
@@ -199,22 +199,43 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
             res.set('X-Cache', 'HIT');
         }
 
-        // Lọc theo loại nếu cần
-        let filtered = loai === 'an'
-            ? data.filter(hs => hs.phong_an)
-            : loai === 'ngu'
-                ? data.filter(hs => hs.phong_ngu)
-                : data;
-
-        // Nếu có truyền ngày cụ thể thì lọc các HS có hiệu lực tại ngày đó
+        // Lọc theo loại và lịch sử phòng theo ngày nếu có truyền tham số ngay
+        let filtered;
         if (req.query.ngay) {
             const d = req.query.ngay;
-            filtered = filtered.filter(hs => {
+            const lsRecords = await LichSuPhanPhong.findAll({
+                where: {
+                    tu_ngay: { [Op.lte]: d },
+                    [Op.or]: [
+                        { den_ngay: null },
+                        { den_ngay: { [Op.gte]: d } },
+                    ],
+                },
+                attributes: ['ma_hs_id', 'loai_phong', 'ma_phong_id'],
+            });
+            const lsMap = {};
+            lsRecords.forEach(r => {
+                lsMap[`${r.ma_hs_id}_${r.loai_phong}`] = r.ma_phong_id;
+            });
+
+            filtered = data.map(hs => {
+                const pAn = lsMap[`${hs.id}_0`] !== undefined ? lsMap[`${hs.id}_0`] : hs.phong_an;
+                const pNgu = lsMap[`${hs.id}_1`] !== undefined ? lsMap[`${hs.id}_1`] : hs.phong_ngu;
+                return { ...hs, phong_an: pAn, phong_ngu: pNgu };
+            }).filter(hs => {
+                if (loai === 'an' && !hs.phong_an) return false;
+                if (loai === 'ngu' && !hs.phong_ngu) return false;
                 if (hs.ngay_vao && hs.ngay_vao > d) return false;
                 if (hs.ngay_rut && hs.ngay_rut < d) return false;
                 if (!hs.ngay_rut && !hs.dang_hoc) return false;
                 return true;
             });
+        } else {
+            filtered = loai === 'an'
+                ? data.filter(hs => hs.phong_an)
+                : loai === 'ngu'
+                    ? data.filter(hs => hs.phong_ngu)
+                    : data;
         }
 
         if (req.query.active_only === 'true' || req.query.dang_hoc === 'true' || req.query.active === 'true' || req.query.active === '1') {
@@ -376,6 +397,7 @@ async function checkAndAutoRescueRooms(targetNgay) {
                     recordsToSave.push({
                         ma_hs_id: hs.id,
                         ngay: targetNgay,
+                        [fieldPhong]: ma_phong,
                         [fieldStatus]: finalStatus,
                         [fieldPhuongThuc]: phuongThuc,
                         [fieldThoiGian]: thoiGian,
@@ -387,7 +409,7 @@ async function checkAndAutoRescueRooms(targetNgay) {
                 try {
                     if (recordsToSave.length > 0) {
                         await DiemDanhHS.bulkCreate(recordsToSave, {
-                            updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'ghi_chu'],
+                            updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'ghi_chu', fieldPhong],
                             transaction: t
                         });
                     }
@@ -606,21 +628,53 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
         }
 
         const field = loai === 'an' ? 'diem_danh_an' : 'diem_danh_ngu';
+        const fieldPhong = loai === 'an' ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
+        const loaiPhongNum = loai === 'an' ? 0 : 1;
         const t = await sequelize.transaction();
         try {
             const oppositeField = loai === 'an' ? 'diem_danh_ngu' : 'diem_danh_an';
+            const hsIds = records.map(r => r.ma_hs);
+
+            // Tìm snapshot phòng tại ngày reqNgay từ LichSuPhanPhong
+            const lsRecords = await LichSuPhanPhong.findAll({
+                where: {
+                    ma_hs_id: { [Op.in]: hsIds },
+                    loai_phong: loaiPhongNum,
+                    tu_ngay: { [Op.lte]: reqNgay },
+                    [Op.or]: [
+                        { den_ngay: null },
+                        { den_ngay: { [Op.gte]: reqNgay } },
+                    ],
+                },
+                attributes: ['ma_hs_id', 'ma_phong_id'],
+                order: [['tu_ngay', 'ASC']],
+                transaction: t,
+            });
+            const lsMap = {};
+            lsRecords.forEach(r => { lsMap[r.ma_hs_id] = r.ma_phong_id; });
+
+            // Fallback từ quanli_hocsinh nếu chưa có trong lịch sử
+            const fallbackHS = await HocSinh.findAll({
+                where: { id: { [Op.in]: hsIds } },
+                attributes: ['id', 'ma_phong_an_id', 'ma_phong_ngu_id'],
+                transaction: t,
+            });
+            const fallbackMap = {};
+            fallbackHS.forEach(h => {
+                fallbackMap[h.id] = loai === 'an' ? h.ma_phong_an_id : h.ma_phong_ngu_id;
+            });
+
             const data = records.map(r => ({
                 ma_hs_id: r.ma_hs,
                 ngay: r.ngay,
                 [field]: r.status,
-                // Khi tạo mới row, field kia chưa có thì set explicitly là null (tránh db default 0)
-                // Lưu ý updateOnDuplicate chỉ update [field, 'ghi_chu'] nên dữ liệu field kia ko bị ghi đè thành null nếu row đã tồn tại
+                [fieldPhong]: r.ma_phong || lsMap[r.ma_hs] || fallbackMap[r.ma_hs] || null,
                 [oppositeField]: null,
                 ghi_chu: r.ghi_chu || null
             }));
 
             await DiemDanhHS.bulkCreate(data, {
-                updateOnDuplicate: [field, 'ghi_chu'],
+                updateOnDuplicate: [field, 'ghi_chu', fieldPhong],
                 transaction: t
             });
             await t.commit();
@@ -684,7 +738,7 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
 
             const hsRecords = await HocSinh.findAll({
                 where: { id: { [Op.in]: ma_hs_list } },
-                attributes: ['id', 'dang_hoc', 'ngay_vao', 'ngay_rut'],
+                attributes: ['id', 'dang_hoc', 'ngay_vao', 'ngay_rut', 'ma_phong_an_id', 'ma_phong_ngu_id'],
                 transaction: t,
             });
             const hsMap = new Map(hsRecords.map(h => [h.id, h]));
@@ -706,9 +760,11 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
                         const updates = {};
                         if (loaiCa === 'an' || loaiCa === 'ca_ngay') {
                             updates.diem_danh_an = 2; // 2 = Phép
+                            if (!rec.ma_phong_an_id && hsInfo?.ma_phong_an_id) updates.ma_phong_an_id = hsInfo.ma_phong_an_id;
                         }
                         if (loaiCa === 'ngu' || loaiCa === 'ca_ngay') {
                             updates.diem_danh_ngu = 2; // 2 = Phép
+                            if (!rec.ma_phong_ngu_id && hsInfo?.ma_phong_ngu_id) updates.ma_phong_ngu_id = hsInfo.ma_phong_ngu_id;
                         }
                         if (ghi_chu && ghi_chu.trim()) {
                             updates.ghi_chu = ghi_chu.trim();
@@ -720,6 +776,8 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
                             ngay: d,
                             diem_danh_an: (loaiCa === 'an' || loaiCa === 'ca_ngay') ? 2 : null,
                             diem_danh_ngu: (loaiCa === 'ngu' || loaiCa === 'ca_ngay') ? 2 : null,
+                            ma_phong_an_id: hsInfo?.ma_phong_an_id || null,
+                            ma_phong_ngu_id: hsInfo?.ma_phong_ngu_id || null,
                             ghi_chu: ghi_chu && ghi_chu.trim() ? ghi_chu.trim() : null,
                         };
                         await DiemDanhHS.create(newRow, { transaction: t });
@@ -1202,6 +1260,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
         const t = await sequelize.transaction();
         try {
+            const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
             const fieldStatus = loaiTrucNum === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
             const fieldPhuongThuc = loaiTrucNum === 0 ? 'phuong_thuc_an' : 'phuong_thuc_ngu';
             const fieldThoiGian = loaiTrucNum === 0 ? 'thoi_gian_diem_danh_an' : 'thoi_gian_diem_danh_ngu';
@@ -1229,6 +1288,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 recordsToSave.push({
                     ma_hs_id: hs.id,
                     ngay,
+                    [fieldPhong]: ma_phong_id,
                     [fieldStatus]: finalStatus,
                     [fieldPhuongThuc]: phuongThuc,
                     [fieldThoiGian]: thoiGian,
@@ -1239,7 +1299,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
             if (recordsToSave.length > 0) {
                 await DiemDanhHS.bulkCreate(recordsToSave, {
-                    updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'nguoi_diem_danh_id', 'ghi_chu'],
+                    updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'nguoi_diem_danh_id', 'ghi_chu', fieldPhong],
                     transaction: t
                 });
             }
@@ -1555,7 +1615,9 @@ const ALLOWED_CLUSTERS = [
     ['P6', 'P7', 'P8'],
     ['P3', 'P4', 'P5'],
     ['D21', 'D22', 'D23'],
-    ['D31', 'D32', 'D33']
+    ['D31', 'D32', 'D33'],
+    ['C11', 'C12'],
+    ['C13', 'C14']
 ];
 
 function areRoomsInSameCluster(rA, rB) {
@@ -1635,7 +1697,7 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
                     await t.rollback();
                     return res.status(400).json({
                         ok: false,
-                        error: `Giáo viên ${targetGv.ho_ten} đang trực phòng ${existing.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không thuộc cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33).`
+                        error: `Giáo viên ${targetGv.ho_ten} đang trực phòng ${existing.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không thuộc cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33, C11-C12, C13-C14).`
                     });
                 }
             }
@@ -1921,7 +1983,7 @@ router.post('/api/lichtruc_khung/save/', loginRequired, roleRequired('admin', 'q
                     await t.rollback();
                     return res.status(400).json({
                         ok: false,
-                        error: `Giáo viên ${gv.ho_ten} đã được xếp lịch khung ở phòng ${ex.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không cùng cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33).`
+                        error: `Giáo viên ${gv.ho_ten} đã được xếp lịch khung ở phòng ${ex.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không cùng cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33, C11-C12, C13-C14).`
                     });
                 }
             }
@@ -2304,13 +2366,13 @@ router.get('/api/baocao/hs-vang-ngay/', loginRequired, async (req, res) => {
             hsIds.push(h.id);
         });
 
-        // 2. Lấy dữ liệu điểm danh của ngày này
+        // 2. Lấy dữ liệu điểm danh của ngày này (kèm snapshot phòng)
         const ddRecords = await DiemDanhHS.findAll({
             where: {
                 ngay: targetDate,
                 ma_hs_id: { [Op.in]: hsIds }
             },
-            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu', 'ghi_chu', 'thoi_gian_diem_danh_an', 'thoi_gian_diem_danh_ngu']
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'diem_danh_ngu', 'ghi_chu', 'thoi_gian_diem_danh_an', 'thoi_gian_diem_danh_ngu', 'ma_phong_an_id', 'ma_phong_ngu_id']
         });
 
         const ddMap = {};
@@ -2352,8 +2414,8 @@ router.get('/api/baocao/hs-vang-ngay/', loginRequired, async (req, res) => {
                     ho_ten: hs.ho_ten,
                     lop: hs.lop,
                     gioi_tinh: hs.gioi_tinh,
-                    ma_phong_an_id: hs.ma_phong_an_id,
-                    ma_phong_ngu_id: hs.ma_phong_ngu_id,
+                    ma_phong_an_id: dd.ma_phong_an_id || hs.ma_phong_an_id,
+                    ma_phong_ngu_id: dd.ma_phong_ngu_id || hs.ma_phong_ngu_id,
                     diem_danh_an: an !== undefined ? an : null,
                     diem_danh_ngu: ngu !== undefined ? ngu : null,
                     ghi_chu: dd.ghi_chu || null,
@@ -2443,10 +2505,29 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
             };
         });
 
-        // 4b. Lấy toàn bộ dữ liệu điểm danh ăn trong tháng
+        // 4b. Lấy toàn bộ dữ liệu điểm danh ăn trong tháng (kèm snapshot phòng)
         const ddRecords = await DiemDanhHS.findAll({
             where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
-            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an'],
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an', 'ma_phong_an_id'],
+        });
+
+        // Lịch sử phân phòng ăn có hiệu lực trong tháng này
+        const lsAnRecords = await LichSuPhanPhong.findAll({
+            where: {
+                loai_phong: 0,
+                tu_ngay: { [Op.lte]: end },
+                [Op.or]: [
+                    { den_ngay: null },
+                    { den_ngay: { [Op.gte]: start } },
+                ],
+            },
+            attributes: ['ma_hs_id', 'ma_phong_id', 'tu_ngay'],
+            order: [['tu_ngay', 'ASC']],
+        });
+        const studentRoomMapAn = {};
+        lsAnRecords.forEach(r => { studentRoomMapAn[r.ma_hs_id] = r.ma_phong_id; });
+        ddRecords.forEach(r => {
+            if (r.ma_phong_an_id) studentRoomMapAn[r.ma_hs_id] = r.ma_phong_an_id;
         });
 
         // Build ddMap: { hsId: { 'YYYY-MM-DD': 0|1|2 } }
@@ -2461,7 +2542,7 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
         phongList.forEach(p => { dataByPhong[p.ma_phong] = []; });
 
         hsList.forEach(hs => {
-            const maPhong = hs.phong_an?.ma_phong;
+            const maPhong = studentRoomMapAn[hs.id] || hs.phong_an?.ma_phong;
             if (!maPhong || !dataByPhong[maPhong]) return;
             const hsDD = ddMap[hs.id] || {};
             // Chỉ lấy giá trị của các ngày có bán trú thực tế
@@ -2564,11 +2645,31 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
             };
         });
 
-        // 4b. Điểm danh ngủ trong tháng
+        // 4b. Điểm danh ngủ trong tháng (kèm snapshot phòng)
         const ddRecords = await DiemDanhHS.findAll({
             where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
-            attributes: ['ma_hs_id', 'ngay', 'diem_danh_ngu'],
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_ngu', 'ma_phong_ngu_id'],
         });
+
+        // Lịch sử phân phòng ngủ có hiệu lực trong tháng này
+        const lsNguRecords = await LichSuPhanPhong.findAll({
+            where: {
+                loai_phong: 1,
+                tu_ngay: { [Op.lte]: end },
+                [Op.or]: [
+                    { den_ngay: null },
+                    { den_ngay: { [Op.gte]: start } },
+                ],
+            },
+            attributes: ['ma_hs_id', 'ma_phong_id', 'tu_ngay'],
+            order: [['tu_ngay', 'ASC']],
+        });
+        const studentRoomMapNgu = {};
+        lsNguRecords.forEach(r => { studentRoomMapNgu[r.ma_hs_id] = r.ma_phong_id; });
+        ddRecords.forEach(r => {
+            if (r.ma_phong_ngu_id) studentRoomMapNgu[r.ma_hs_id] = r.ma_phong_ngu_id;
+        });
+
         const ddMap = {};
         ddRecords.forEach(r => {
             if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
@@ -2579,7 +2680,7 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
         const dataByPhong = {};
         phongList.forEach(p => { dataByPhong[p.ma_phong] = []; });
         hsList.forEach(hs => {
-            const maPhong = hs.phong_ngu?.ma_phong;
+            const maPhong = studentRoomMapNgu[hs.id] || hs.phong_ngu?.ma_phong;
             if (!maPhong || !dataByPhong[maPhong]) return;
             const hsDD = ddMap[hs.id] || {};
             const diemdanh = {};

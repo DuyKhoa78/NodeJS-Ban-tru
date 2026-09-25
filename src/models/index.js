@@ -18,6 +18,7 @@ const CauHinhNgay = require('./CauHinhNgay');
 const LichSuThaoTac = require('./LichSuThaoTac');
 const BaoCaoTruc = require('./BaoCaoTruc');
 const DiemDanhDraft = require('./DiemDanhDraft');
+const LichSuPhanPhong = require('./LichSuPhanPhong');
 
 // ─── Associations ─────────────────────────────────────────────────────────────
 
@@ -30,6 +31,16 @@ HocSinh.belongsTo(Phong, { foreignKey: 'ma_phong_an_id', as: 'phong_an' });
 HocSinh.belongsTo(Phong, { foreignKey: 'ma_phong_ngu_id', as: 'phong_ngu' });
 Phong.hasMany(HocSinh, { foreignKey: 'ma_phong_an_id', as: 'hocsinh_an' });
 Phong.hasMany(HocSinh, { foreignKey: 'ma_phong_ngu_id', as: 'hocsinh_ngu' });
+
+// LichSuPhanPhong ↔ HocSinh, Phong
+HocSinh.hasMany(LichSuPhanPhong, { foreignKey: 'ma_hs_id', as: 'lich_su_phong' });
+LichSuPhanPhong.belongsTo(HocSinh, { foreignKey: 'ma_hs_id', as: 'hoc_sinh' });
+LichSuPhanPhong.belongsTo(Phong, { foreignKey: 'ma_phong_id', as: 'phong' });
+Phong.hasMany(LichSuPhanPhong, { foreignKey: 'ma_phong_id', as: 'lich_su_phan_phong' });
+
+// DiemDanhHS ↔ Phong (Snapshot phòng ăn & ngủ)
+DiemDanhHS.belongsTo(Phong, { foreignKey: 'ma_phong_an_id', as: 'phong_an' });
+DiemDanhHS.belongsTo(Phong, { foreignKey: 'ma_phong_ngu_id', as: 'phong_ngu' });
 
 // MuaVatDung ↔ PhanBoVatDung
 MuaVatDung.hasMany(PhanBoVatDung, { foreignKey: 'mua_id', as: 'phan_bo' });
@@ -88,4 +99,5 @@ module.exports = {
   CauHinhNgay,
   LichSuThaoTac,
   BaoCaoTruc,
+  LichSuPhanPhong,
 };

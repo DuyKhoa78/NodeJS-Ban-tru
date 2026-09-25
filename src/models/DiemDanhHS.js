@@ -55,6 +55,18 @@ const DiemDanhHS = sequelize.define('DiemDanhHS', {
     allowNull: true,
     references: { model: 'accounts_staffuser', key: 'id' },
   },
+  ma_phong_an_id: {
+    type: DataTypes.STRING(10),
+    allowNull: true,
+    references: { model: 'quanli_phong', key: 'ma_phong' },
+    comment: 'Snapshot phòng ăn tại ngày điểm danh',
+  },
+  ma_phong_ngu_id: {
+    type: DataTypes.STRING(10),
+    allowNull: true,
+    references: { model: 'quanli_phong', key: 'ma_phong' },
+    comment: 'Snapshot phòng ngủ tại ngày điểm danh',
+  },
 }, {
   tableName: 'nghiepvu_diemdanhhs',
   timestamps: false,

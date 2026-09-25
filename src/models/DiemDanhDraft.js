@@ -17,7 +17,7 @@ const DiemDanhDraft = sequelize.define('DiemDanhDraft', {
     comment: '0=An, 1=Ngu',
   },
   ma_phong_id: {
-    type: DataTypes.STRING(4),
+    type: DataTypes.STRING(10),
     allowNull: false,
     references: { model: 'quanli_phong', key: 'ma_phong' },
   },

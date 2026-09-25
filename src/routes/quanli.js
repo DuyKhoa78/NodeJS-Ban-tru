@@ -7,7 +7,8 @@ const { parse } = require('csv-parse/sync');
 const { Op } = require('sequelize');
 const {
   HocSinh, GiaoVien, Phong, MuaVatDung, PhanBoVatDung,
-  CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize, LichSuThaoTac
+  CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize, LichSuThaoTac,
+  LichSuPhanPhong, DiemDanhDraft, DiemDanhPhong, LichTrucCoDinh
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const { invalidateStaticCaches } = require('../utils/appCache');
@@ -255,7 +256,47 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
       ghi_chu: ghi_chu || null,
     };
 
+    const todayStr = new Date().toISOString().split('T')[0];
+    const getPrevDay = (dStr) => {
+      const d = new Date(dStr + 'T00:00:00');
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().split('T')[0];
+    };
+    const prevDay = getPrevDay(todayStr);
+
     if (id) {
+      const oldHs = await HocSinh.findByPk(id);
+      if (oldHs) {
+        if (oldHs.ma_phong_an_id !== data.ma_phong_an_id) {
+          await LichSuPhanPhong.update({ den_ngay: prevDay }, { where: { ma_hs_id: id, loai_phong: 0, den_ngay: null, tu_ngay: { [Op.lte]: prevDay } } });
+          await LichSuPhanPhong.update({ den_ngay: todayStr }, { where: { ma_hs_id: id, loai_phong: 0, den_ngay: null } });
+          if (data.ma_phong_an_id) {
+            await LichSuPhanPhong.create({
+              ma_hs_id: id,
+              loai_phong: 0,
+              ma_phong_id: data.ma_phong_an_id,
+              tu_ngay: todayStr,
+              den_ngay: null,
+              ghi_chu: `Đổi phòng ăn từ ${oldHs.ma_phong_an_id || 'Chưa xếp'} sang ${data.ma_phong_an_id}`
+            });
+          }
+        }
+        if (oldHs.ma_phong_ngu_id !== data.ma_phong_ngu_id) {
+          await LichSuPhanPhong.update({ den_ngay: prevDay }, { where: { ma_hs_id: id, loai_phong: 1, den_ngay: null, tu_ngay: { [Op.lte]: prevDay } } });
+          await LichSuPhanPhong.update({ den_ngay: todayStr }, { where: { ma_hs_id: id, loai_phong: 1, den_ngay: null } });
+          if (data.ma_phong_ngu_id) {
+            await LichSuPhanPhong.create({
+              ma_hs_id: id,
+              loai_phong: 1,
+              ma_phong_id: data.ma_phong_ngu_id,
+              tu_ngay: todayStr,
+              den_ngay: null,
+              ghi_chu: `Đổi phòng ngủ từ ${oldHs.ma_phong_ngu_id || 'Chưa xếp'} sang ${data.ma_phong_ngu_id}`
+            });
+          }
+        }
+      }
+
       await HocSinh.update(data, { where: { id } });
       invalidateStaticCaches();
       return res.json({ ok: true, message: 'Cập nhật học sinh thành công' });
@@ -273,10 +314,134 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
           throw insertErr;
         }
       }
+
+      if (hs) {
+        if (hs.ma_phong_an_id) {
+          await LichSuPhanPhong.create({
+            ma_hs_id: hs.id,
+            loai_phong: 0,
+            ma_phong_id: hs.ma_phong_an_id,
+            tu_ngay: hs.ngay_vao || todayStr,
+            den_ngay: null,
+            ghi_chu: 'Khởi tạo phòng ăn học sinh mới'
+          });
+        }
+        if (hs.ma_phong_ngu_id) {
+          await LichSuPhanPhong.create({
+            ma_hs_id: hs.id,
+            loai_phong: 1,
+            ma_phong_id: hs.ma_phong_ngu_id,
+            tu_ngay: hs.ngay_vao || todayStr,
+            den_ngay: null,
+            ghi_chu: 'Khởi tạo phòng ngủ học sinh mới'
+          });
+        }
+      }
+
       invalidateStaticCaches();
       return res.json({ ok: true, message: 'Thêm học sinh thành công', id: hs.id });
     }
   } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** POST /api/hocsinh/chuyen-phong-hang-loat/ - Chuyển phòng hàng loạt kèm lưu lịch sử */
+router.post('/api/hocsinh/chuyen-phong-hang-loat/', loginRequired, roleRequired('admin'), async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { hs_ids, loai_phong, ma_phong_moi, ngay_ap_dung, ghi_chu } = req.body;
+    if (!Array.isArray(hs_ids) || hs_ids.length === 0) {
+      await t.rollback();
+      return res.status(400).json({ ok: false, error: 'Chưa chọn học sinh nào để chuyển phòng' });
+    }
+    const loai = parseInt(loai_phong); // 0=An, 1=Ngu
+    if (loai !== 0 && loai !== 1) {
+      await t.rollback();
+      return res.status(400).json({ ok: false, error: 'Loại phòng không hợp lệ (0: Ăn, 1: Ngủ)' });
+    }
+
+    const effectiveDate = ngay_ap_dung || new Date().toISOString().split('T')[0];
+
+    // Validate phòng mới nếu có
+    let targetRoom = null;
+    if (ma_phong_moi) {
+      targetRoom = await Phong.findByPk(ma_phong_moi, { transaction: t });
+      if (!targetRoom || targetRoom.loai_phong !== loai) {
+        await t.rollback();
+        return res.status(400).json({ ok: false, error: `Phòng ${ma_phong_moi} không hợp lệ hoặc sai loại phòng` });
+      }
+    }
+
+    const students = await HocSinh.findAll({
+      where: { id: { [Op.in]: hs_ids } },
+      transaction: t,
+    });
+
+    // Nếu là phòng ngủ, kiểm tra giới tính
+    if (loai === 1 && targetRoom) {
+      const invalidGender = students.some(s => s.gioi_tinh !== targetRoom.gioi_tinh);
+      if (invalidGender) {
+        await t.rollback();
+        const gtStr = targetRoom.gioi_tinh === 0 ? 'Nam' : 'Nữ';
+        return res.status(400).json({ ok: false, error: `Phòng ${targetRoom.ma_phong} chỉ dành cho học sinh ${gtStr}. Vui lòng lọc đúng giới tính.` });
+      }
+
+      // Kiểm tra sức chứa
+      const currentInRoom = await HocSinh.count({
+        where: { ma_phong_ngu_id: targetRoom.ma_phong, id: { [Op.notIn]: hs_ids }, dang_hoc: true },
+        transaction: t,
+      });
+      if (currentInRoom + students.length > targetRoom.suc_chua) {
+        await t.rollback();
+        return res.status(400).json({
+          ok: false,
+          error: `Phòng ${targetRoom.ma_phong} hiện có ${currentInRoom} HS, không thể nhận thêm ${students.length} HS (Sức chứa tối đa: ${targetRoom.suc_chua})`
+        });
+      }
+    }
+
+    const fieldToUpdate = loai === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
+
+    for (const hs of students) {
+      const oldRoom = hs[fieldToUpdate];
+      if (oldRoom === ma_phong_moi) continue; // Không đổi
+
+      const prevDate = getPrevDay(effectiveDate);
+      // 1. Đóng mốc phòng cũ trong lịch sử
+      await LichSuPhanPhong.update(
+        { den_ngay: prevDate },
+        { where: { ma_hs_id: hs.id, loai_phong: loai, den_ngay: null, tu_ngay: { [Op.lte]: prevDate } }, transaction: t }
+      );
+      await LichSuPhanPhong.update(
+        { den_ngay: effectiveDate },
+        { where: { ma_hs_id: hs.id, loai_phong: loai, den_ngay: null }, transaction: t }
+      );
+
+      // 2. Mở mốc phòng mới nếu có
+      if (ma_phong_moi) {
+        await LichSuPhanPhong.create({
+          ma_hs_id: hs.id,
+          loai_phong: loai,
+          ma_phong_id: ma_phong_moi,
+          tu_ngay: effectiveDate,
+          den_ngay: null,
+          ghi_chu: ghi_chu || `Chuyển phòng ${loai === 0 ? 'ăn' : 'ngủ'} từ ${oldRoom || 'Chưa xếp'} sang ${ma_phong_moi}`,
+        }, { transaction: t });
+      }
+
+      // 3. Cập nhật hồ sơ học sinh
+      await hs.update({ [fieldToUpdate]: ma_phong_moi || null }, { transaction: t });
+    }
+
+    await t.commit();
+    invalidateStaticCaches();
+    return res.json({
+      ok: true,
+      message: `Đã chuyển ${students.length} học sinh sang phòng ${ma_phong_moi || 'bỏ phân phòng'} thành công từ ngày ${effectiveDate}`,
+    });
+  } catch (err) {
+    await t.rollback();
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -1061,7 +1226,7 @@ router.post('/api/phong/save/', loginRequired, roleRequired('admin'), async (req
     if (!ma_phong) return res.status(400).json({ ok: false, error: 'Mã phòng không được để trống' });
     const maPhong = String(ma_phong).trim().toUpperCase();
     if (maPhong.length === 0) return res.status(400).json({ ok: false, error: 'Mã phòng không được để trống' });
-    if (maPhong.length > 4) return res.status(400).json({ ok: false, error: 'Mã phòng tối đa 4 ký tự' });
+    if (maPhong.length > 10) return res.status(400).json({ ok: false, error: 'Mã phòng tối đa 10 ký tự' });
 
     const loai = parseInt(loai_phong);
     const gt = loai === 1 ? parseInt(gioi_tinh) : null;
@@ -1086,15 +1251,36 @@ router.post('/api/phong/save/', loginRequired, roleRequired('admin'), async (req
 
 /** POST /api/phong/delete/ */
 router.post('/api/phong/delete/', loginRequired, roleRequired('admin'), async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const { ma_phong } = req.body;
-    const phong = await Phong.findByPk(ma_phong);
-    if (!phong) return res.status(404).json({ ok: false, error: 'Không tìm thấy phòng' });
-    await phong.destroy();
+    const phong = await Phong.findByPk(ma_phong, { transaction: t });
+    if (!phong) {
+      await t.rollback();
+      return res.status(404).json({ ok: false, error: 'Không tìm thấy phòng' });
+    }
+
+    // 1. Dọn dẹp bảng nháp và lịch trực cố định của phòng này
+    await DiemDanhDraft.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
+    await LichTrucCoDinh.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
+    await PhanBoVatDung.destroy({ where: { phong_id: ma_phong }, transaction: t });
+    await PhanCongTrucGV.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
+    await DiemDanhPhong.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
+
+    // 2. Gỡ phòng khỏi học sinh và lịch sử nếu còn
+    await HocSinh.update({ ma_phong_an_id: null }, { where: { ma_phong_an_id: ma_phong }, transaction: t });
+    await HocSinh.update({ ma_phong_ngu_id: null }, { where: { ma_phong_ngu_id: ma_phong }, transaction: t });
+    await LichSuPhanPhong.update({ ma_phong_id: null }, { where: { ma_phong_id: ma_phong }, transaction: t });
+
+    // 3. Xóa phòng
+    await phong.destroy({ transaction: t });
+
+    await t.commit();
     invalidateStaticCaches();
-    return res.json({ ok: true, message: 'Đã xóa phòng' });
+    return res.json({ ok: true, message: `Đã xóa phòng ${ma_phong} thành công` });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    await t.rollback();
+    return res.status(500).json({ ok: false, error: 'Lỗi khi xóa phòng: ' + err.message });
   }
 });
 

@@ -72,6 +72,102 @@ const migrations = [
         console.warn('Migration 20260915_fix_ho_quan_thinh_to_ho_quang_thinh warning:', err.message);
       });
     }
+  },
+  {
+    id: '20260925_expand_ma_phong_to_10_chars',
+    async up(sequelize) {
+      await sequelize.query(`
+        ALTER TABLE "quanli_phong" ALTER COLUMN "ma_phong" TYPE VARCHAR(10);
+        ALTER TABLE "quanli_hocsinh" ALTER COLUMN "ma_phong_an_id" TYPE VARCHAR(10);
+        ALTER TABLE "quanli_hocsinh" ALTER COLUMN "ma_phong_ngu_id" TYPE VARCHAR(10);
+        ALTER TABLE "nghiepvu_diemdanh_draft" ALTER COLUMN "ma_phong_id" TYPE VARCHAR(10);
+        ALTER TABLE "nghiepvu_diemdanhphong" ALTER COLUMN "ma_phong_id" TYPE VARCHAR(10);
+        ALTER TABLE "nghiepvu_lichtruccodinh" ALTER COLUMN "ma_phong_id" TYPE VARCHAR(10);
+        ALTER TABLE "nghiepvu_phancongtrucgv" ALTER COLUMN "ma_phong_id" TYPE VARCHAR(10);
+        ALTER TABLE "quanli_phanbovatdung" ALTER COLUMN "phong_id" TYPE VARCHAR(10);
+      `).catch(err => {
+        console.warn('Migration 20260925_expand_ma_phong_to_10_chars warning:', err.message);
+      });
+    }
+  },
+  {
+    id: '20260925_room_history_and_diemdanh_snapshot',
+    async up(sequelize) {
+      // 1. Tạo bảng quanli_lichsuphanphong
+      await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS "quanli_lichsuphanphong" (
+          "id" SERIAL PRIMARY KEY,
+          "ma_hs_id" INTEGER NOT NULL REFERENCES "quanli_hocsinh"("id") ON DELETE CASCADE,
+          "loai_phong" INTEGER NOT NULL,
+          "ma_phong_id" VARCHAR(10) REFERENCES "quanli_phong"("ma_phong") ON DELETE SET NULL,
+          "tu_ngay" DATE NOT NULL,
+          "den_ngay" DATE,
+          "ghi_chu" TEXT,
+          "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS "idx_lspp_hs_loai" ON "quanli_lichsuphanphong"("ma_hs_id", "loai_phong", "tu_ngay");
+        CREATE INDEX IF NOT EXISTS "idx_lspp_phong_loai" ON "quanli_lichsuphanphong"("ma_phong_id", "loai_phong", "tu_ngay", "den_ngay");
+      `).catch(err => {
+        console.warn('Migration 20260925_room_history_and_diemdanh_snapshot (table create) warning:', err.message);
+      });
+
+      // 2. Thêm cột snapshot ma_phong vào nghiepvu_diemdanhhs
+      await sequelize.query(`
+        ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "ma_phong_an_id" VARCHAR(10);
+        ALTER TABLE "nghiepvu_diemdanhhs" ADD COLUMN IF NOT EXISTS "ma_phong_ngu_id" VARCHAR(10);
+        CREATE INDEX IF NOT EXISTS "idx_ddhs_phong_an" ON "nghiepvu_diemdanhhs"("ma_phong_an_id", "ngay");
+        CREATE INDEX IF NOT EXISTS "idx_ddhs_phong_ngu" ON "nghiepvu_diemdanhhs"("ma_phong_ngu_id", "ngay");
+      `).catch(err => {
+        console.warn('Migration 20260925_room_history_and_diemdanh_snapshot (columns) warning:', err.message);
+      });
+
+      // 3. Chốt lịch sử quá khứ (Backfill snapshot vào nghiepvu_diemdanhhs từ quanli_hocsinh)
+      await sequelize.query(`
+        UPDATE "nghiepvu_diemdanhhs" dd
+        SET "ma_phong_an_id" = hs."ma_phong_an_id",
+            "ma_phong_ngu_id" = hs."ma_phong_ngu_id"
+        FROM "quanli_hocsinh" hs
+        WHERE dd."ma_hs_id" = hs."id"
+          AND (dd."ma_phong_an_id" IS NULL OR dd."ma_phong_ngu_id" IS NULL);
+      `).catch(err => {
+        console.warn('Migration 20260925_room_history_and_diemdanh_snapshot (backfill diemdanh) warning:', err.message);
+      });
+
+      // 4. Khởi tạo dữ liệu lịch sử phân phòng ban đầu vào quanli_lichsuphanphong
+      await sequelize.query(`
+        INSERT INTO "quanli_lichsuphanphong" ("ma_hs_id", "loai_phong", "ma_phong_id", "tu_ngay", "den_ngay", "ghi_chu")
+        SELECT 
+          id, 
+          0, 
+          ma_phong_an_id, 
+          COALESCE(ngay_vao, '2026-08-01'::date), 
+          NULL, 
+          'Khởi tạo lịch sử phân phòng ăn ban đầu'
+        FROM "quanli_hocsinh"
+        WHERE ma_phong_an_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM "quanli_lichsuphanphong" 
+            WHERE ma_hs_id = quanli_hocsinh.id AND loai_phong = 0
+          );
+
+        INSERT INTO "quanli_lichsuphanphong" ("ma_hs_id", "loai_phong", "ma_phong_id", "tu_ngay", "den_ngay", "ghi_chu")
+        SELECT 
+          id, 
+          1, 
+          ma_phong_ngu_id, 
+          COALESCE(ngay_vao, '2026-08-01'::date), 
+          NULL, 
+          'Khởi tạo lịch sử phân phòng ngủ ban đầu'
+        FROM "quanli_hocsinh"
+        WHERE ma_phong_ngu_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM "quanli_lichsuphanphong" 
+            WHERE ma_hs_id = quanli_hocsinh.id AND loai_phong = 1
+          );
+      `).catch(err => {
+        console.warn('Migration 20260925_room_history_and_diemdanh_snapshot (backfill lichsu) warning:', err.message);
+      });
+    }
   }
 ];
 

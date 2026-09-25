@@ -13,7 +13,7 @@ const PhanBoVatDung = sequelize.define('PhanBoVatDung', {
     references: { model: 'quanli_muavatdung', key: 'id' },
   },
   phong_id: {
-    type: DataTypes.STRING(4),
+    type: DataTypes.STRING(10),
     allowNull: false,
     references: { model: 'quanli_phong', key: 'ma_phong' },
   },

@@ -191,7 +191,9 @@ const ALLOWED_CLUSTERS = [
   ['P6', 'P7', 'P8'],
   ['P3', 'P4', 'P5'],
   ['D21', 'D22', 'D23'],
-  ['D31', 'D32', 'D33']
+  ['D31', 'D32', 'D33'],
+  ['C11', 'C12'],
+  ['C13', 'C14']
 ];
 
 function areRoomsInSameCluster(rA, rB) {

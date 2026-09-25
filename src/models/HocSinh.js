@@ -39,12 +39,12 @@ const HocSinh = sequelize.define('HocSinh', {
     allowNull: true,
   },
   ma_phong_an_id: {
-    type: DataTypes.STRING(4),
+    type: DataTypes.STRING(10),
     allowNull: true,
     references: { model: 'quanli_phong', key: 'ma_phong' },
   },
   ma_phong_ngu_id: {
-    type: DataTypes.STRING(4),
+    type: DataTypes.STRING(10),
     allowNull: true,
     references: { model: 'quanli_phong', key: 'ma_phong' },
   },

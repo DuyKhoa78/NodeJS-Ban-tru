@@ -67,8 +67,11 @@ router.get('/api/the-ban-tru/danh-sach', loginRequired, roleRequired('admin', 'h
       total: list.length,
       classes: classes.map((c) => c.lop),
       students: list.map((h) => {
-        const hasAvatar = fs.existsSync(path.join(avatarsDir, `${h.id}.jpg`));
-        const avatarUrl = hasAvatar ? `/uploads/avatars/${h.id}.jpg` : null;
+        const fileRaw = `${h.id}.jpg`;
+        const fileCard = `26${String(h.id).padStart(3, '0')}.jpg`;
+        const hasRaw = fs.existsSync(path.join(avatarsDir, fileRaw));
+        const hasCard = !hasRaw && fs.existsSync(path.join(avatarsDir, fileCard));
+        const avatarUrl = hasRaw ? `/uploads/avatars/${fileRaw}` : (hasCard ? `/uploads/avatars/${fileCard}` : null);
         return {
           id: `26${String(h.id).padStart(3, '0')}`,
           raw_id: h.id,
