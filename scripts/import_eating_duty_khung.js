@@ -17,22 +17,24 @@ async function main() {
   }
 
   // Cập nhật cấu hình phòng ăn nếu cần
-  await Phong.update({ sl_diem_danh: 3, sl_ho_tro: 2 }, { where: { ma_phong: 'HT.A' } });
+  await Phong.update({ sl_diem_danh: 3, sl_ho_tro: 3 }, { where: { ma_phong: 'SANH' } });
   await Phong.update({ sl_diem_danh: 1, sl_ho_tro: 1 }, { where: { ma_phong: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'] } });
   console.log('✅ Đã cập nhật giới hạn số lượng GV điểm danh / giám sát cho các phòng ăn.');
 
   // Danh sách phân công trực ăn (Cố định Thứ 2 -> Thứ 5: thu 0, 1, 2, 3):
   const assignments = [
-    // 1. HT A: Đào Thị Cẩm Hạnh (ĐD)
-    { phongs: ['HT.A'], gv: 'Đào Thị Cẩm Hạnh', nhiem_vu: 0 },
-    // 2. HT A: Phan Thanh Nhật (ĐD)
-    { phongs: ['HT.A'], gv: 'Phan Thanh Nhật', nhiem_vu: 0 },
-    // 3. HT A: Lý Công Thành (ĐD)
-    { phongs: ['HT.A'], gv: 'Lý Công Thành', nhiem_vu: 0 },
-    // 4. HT A: Đỗ Văn Thương (GS)
-    { phongs: ['HT.A'], gv: 'Đỗ Văn Thương', nhiem_vu: 1 },
-    // 5. HT A: Mai Quỳnh Châu (GS)
-    { phongs: ['HT.A'], gv: 'Mai Quỳnh Châu', nhiem_vu: 1 },
+    // 1. Sảnh: Đào Thị Cẩm Hạnh (ĐD)
+    { phongs: ['SANH'], gv: 'Đào Thị Cẩm Hạnh', nhiem_vu: 0 },
+    // 2. Sảnh: Phan Thanh Nhật (ĐD)
+    { phongs: ['SANH'], gv: 'Phan Thanh Nhật', nhiem_vu: 0 },
+    // 3. Sảnh: Lý Công Thành (ĐD)
+    { phongs: ['SANH'], gv: 'Lý Công Thành', nhiem_vu: 0 },
+    // 4. Sảnh: Đỗ Văn Thương (GS)
+    { phongs: ['SANH'], gv: 'Đỗ Văn Thương', nhiem_vu: 1 },
+    // 5. Sảnh: Mai Quỳnh Châu (GS)
+    { phongs: ['SANH'], gv: 'Mai Quỳnh Châu', nhiem_vu: 1 },
+    // 5b. Sảnh: Bùi Xuân Kim Sa (GS) - chỉ Thứ 3 đến Thứ 5 (thu 1, 2, 3)
+    { phongs: ['SANH'], gv: 'Bùi Xuân Kim Sa', nhiem_vu: 1, thus: [1, 2, 3] },
 
     // 6. Phòng ăn 1 (P1): Đặng Thị Yến (ĐD)
     { phongs: ['P1'], gv: 'Đặng Thị Yến', nhiem_vu: 0 },
@@ -60,13 +62,14 @@ async function main() {
     { phongs: ['P6', 'P7', 'P8'], gv: 'Đỗ Ngọc Bích Vân', nhiem_vu: 1 },
   ];
 
-  const diningRooms = ['HT.A', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
+  const diningRooms = ['SANH', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
   const recordsToInsert = [];
 
   for (const a of assignments) {
     const gvId = getGvId(a.gv);
+    const thuList = a.thus || [0, 1, 2, 3];
     for (const p of a.phongs) {
-      for (let thu = 0; thu < 4; thu++) { // Thứ 2 (0) -> Thứ 5 (3)
+      for (const thu of thuList) {
         recordsToInsert.push({
           ma_phong_id: p,
           ma_gv_id: gvId,

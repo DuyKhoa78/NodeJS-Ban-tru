@@ -28,6 +28,11 @@ const Phong = sequelize.define('Phong', {
     type: DataTypes.INTEGER,
     defaultValue: 1,
   },
+  dang_dung: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    comment: 'true=Đang sử dụng, false=Lịch sử/Đã lưu trữ',
+  },
 }, {
   tableName: 'quanli_phong',
   timestamps: false,

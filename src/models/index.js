@@ -19,6 +19,8 @@ const LichSuThaoTac = require('./LichSuThaoTac');
 const BaoCaoTruc = require('./BaoCaoTruc');
 const DiemDanhDraft = require('./DiemDanhDraft');
 const LichSuPhanPhong = require('./LichSuPhanPhong');
+const CauHinhDotThanhToan = require('./CauHinhDotThanhToan');
+const ThuTienBanTru = require('./ThuTienBanTru');
 
 // ─── Associations ─────────────────────────────────────────────────────────────
 
@@ -80,6 +82,11 @@ LichTrucCoDinh.belongsTo(Phong, { foreignKey: 'ma_phong_id', as: 'phong' });
 GiaoVien.hasMany(LichTrucCoDinh, { foreignKey: 'ma_gv_id', as: 'lich_truc_co_dinh' });
 Phong.hasMany(LichTrucCoDinh, { foreignKey: 'ma_phong_id', as: 'lich_truc_co_dinh' });
 
+// ThuTienBanTru ↔ HocSinh, StaffUser
+ThuTienBanTru.belongsTo(HocSinh, { foreignKey: 'ma_hs_id', as: 'hoc_sinh' });
+HocSinh.hasMany(ThuTienBanTru, { foreignKey: 'ma_hs_id', as: 'phieu_thu' });
+ThuTienBanTru.belongsTo(StaffUser, { foreignKey: 'nguoi_thu_id', as: 'nguoi_thu' });
+
 module.exports = {
   sequelize,
   StaffUser,
@@ -100,4 +107,6 @@ module.exports = {
   LichSuThaoTac,
   BaoCaoTruc,
   LichSuPhanPhong,
+  CauHinhDotThanhToan,
+  ThuTienBanTru,
 };

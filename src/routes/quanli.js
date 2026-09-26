@@ -8,7 +8,7 @@ const { Op } = require('sequelize');
 const {
   HocSinh, GiaoVien, Phong, MuaVatDung, PhanBoVatDung,
   CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize, LichSuThaoTac,
-  LichSuPhanPhong, DiemDanhDraft, DiemDanhPhong, LichTrucCoDinh
+  LichSuPhanPhong, DiemDanhDraft, DiemDanhPhong, LichTrucCoDinh, CauHinhDotThanhToan
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const { invalidateStaticCaches } = require('../utils/appCache');
@@ -514,7 +514,7 @@ router.post('/api/hocsinh/import/', loginRequired, roleRequired('admin'), handle
     }
 
     // Tải trước danh sách phòng hợp lệ để kiểm tra mà không cần query mỗi dòng
-    const allPhong = await Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] });
+    const allPhong = await Phong.findAll({ where: { dang_dung: true }, attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] });
     const phongAnSet  = new Set(allPhong.filter(p => p.loai_phong === 0).map(p => p.ma_phong));
     const phongNguMap = new Map();
     allPhong.filter(p => p.loai_phong === 1).forEach(p => phongNguMap.set(p.ma_phong, p));
@@ -1180,7 +1180,13 @@ router.post('/api/giaovien/:pk/ranh/', loginRequired, roleRequired('admin'), asy
 /** GET /api/phong/ */
 router.get('/api/phong/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
+    const where = {};
+    if (req.query.all !== 'true' && req.query.include_inactive !== 'true') {
+      where.dang_dung = true;
+    }
+
     const list = await Phong.findAll({
+      where,
       include: [
         {
           model: HocSinh,
@@ -1238,12 +1244,12 @@ router.post('/api/phong/save/', loginRequired, roleRequired('admin'), async (req
 
     if (is_edit) {
       if (!phong) return res.status(404).json({ ok: false, error: 'Không tìm thấy phòng để cập nhật' });
-      await phong.update({ loai_phong: loai, suc_chua: parseInt(suc_chua), gioi_tinh: gt, sl_diem_danh: sl_diem_danh || 1, sl_ho_tro: sl_ho_tro || 1 });
+      await phong.update({ loai_phong: loai, suc_chua: parseInt(suc_chua), gioi_tinh: gt, sl_diem_danh: sl_diem_danh || 1, sl_ho_tro: sl_ho_tro || 1, dang_dung: true });
       invalidateStaticCaches();
       return res.json({ ok: true, message: 'Cập nhật phòng thành công' });
     } else {
       if (phong) return res.status(400).json({ ok: false, error: 'Mã phòng này đã tồn tại trong hệ thống!' });
-      await Phong.create({ ma_phong: maPhong, loai_phong: loai, suc_chua: parseInt(suc_chua), gioi_tinh: gt, sl_diem_danh: sl_diem_danh || 1, sl_ho_tro: sl_ho_tro || 1 });
+      await Phong.create({ ma_phong: maPhong, loai_phong: loai, suc_chua: parseInt(suc_chua), gioi_tinh: gt, sl_diem_danh: sl_diem_danh || 1, sl_ho_tro: sl_ho_tro || 1, dang_dung: true });
       invalidateStaticCaches();
       return res.json({ ok: true, message: 'Thêm phòng thành công' });
     }
@@ -1263,19 +1269,28 @@ router.post('/api/phong/delete/', loginRequired, roleRequired('admin'), async (r
       return res.status(404).json({ ok: false, error: 'Không tìm thấy phòng' });
     }
 
-    // 1. Dọn dẹp bảng nháp và lịch trực cố định của phòng này
+    // Kiểm tra xem phòng có dữ liệu điểm danh hoặc công trực không
+    const pastPC = await PhanCongTrucGV.count({ where: { ma_phong_id: ma_phong }, transaction: t });
+    const pastDP = await DiemDanhPhong.count({ where: { ma_phong_id: ma_phong }, transaction: t });
+
+    if (pastPC > 0 || pastDP > 0) {
+      // Soft-delete (ngừng sử dụng) để bảo vệ toàn vẹn lịch sử chấm công, lương giáo viên và điểm danh
+      await phong.update({ dang_dung: false }, { transaction: t });
+      await LichTrucCoDinh.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
+      await HocSinh.update({ ma_phong_an_id: null }, { where: { ma_phong_an_id: ma_phong }, transaction: t });
+      await HocSinh.update({ ma_phong_ngu_id: null }, { where: { ma_phong_ngu_id: ma_phong }, transaction: t });
+      await t.commit();
+      invalidateStaticCaches();
+      return res.json({ ok: true, message: `Phòng ${ma_phong} có dữ liệu công trực/điểm danh lịch sử nên được chuyển sang trạng thái đã lưu trữ (ngừng sử dụng) để bảo toàn dữ liệu chấm công.` });
+    }
+
+    // Nếu không có lịch sử công trực/điểm danh, dọn dẹp và xóa hoàn toàn
     await DiemDanhDraft.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
     await LichTrucCoDinh.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
     await PhanBoVatDung.destroy({ where: { phong_id: ma_phong }, transaction: t });
-    await PhanCongTrucGV.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
-    await DiemDanhPhong.destroy({ where: { ma_phong_id: ma_phong }, transaction: t });
-
-    // 2. Gỡ phòng khỏi học sinh và lịch sử nếu còn
     await HocSinh.update({ ma_phong_an_id: null }, { where: { ma_phong_an_id: ma_phong }, transaction: t });
     await HocSinh.update({ ma_phong_ngu_id: null }, { where: { ma_phong_ngu_id: ma_phong }, transaction: t });
     await LichSuPhanPhong.update({ ma_phong_id: null }, { where: { ma_phong_id: ma_phong }, transaction: t });
-
-    // 3. Xóa phòng
     await phong.destroy({ transaction: t });
 
     await t.commit();
@@ -1296,12 +1311,13 @@ router.get('/api/cauhinh/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_
   try {
     const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0 }, order: [['ngay_ap_dung', 'DESC']] });
     const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1 }, order: [['ngay_ap_dung', 'DESC']] });
+    const giaTienAnHS = await CauHinhGia.findOne({ where: { loai_truc: 2 }, order: [['ngay_ap_dung', 'DESC']] });
     const [hethong] = await CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } });
     if (hethong.nam_hoc === '2025-2026') {
       hethong.nam_hoc = '2026-2027';
       await hethong.save();
     }
-    return res.json({ ok: true, gia_an: giaAn, gia_ngu: giaNgu, he_thong: hethong });
+    return res.json({ ok: true, gia_an: giaAn, gia_ngu: giaNgu, gia_tien_an_hs: giaTienAnHS, he_thong: hethong });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -1324,18 +1340,23 @@ router.get('/api/cauhinh/lichsu/', loginRequired, roleRequired('admin', 'quan_ly
 /** POST /api/cauhinh/save/ - Body: { an, ngu } */
 router.post('/api/cauhinh/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
-    const { an, ngu } = req.body;
-    const today = new Date().toISOString().split('T')[0];
+    const { an, ngu, tien_an_hs, ngay_ap_dung } = req.body;
+    const today = (ngay_ap_dung && ngay_ap_dung.trim()) ? ngay_ap_dung.trim() : new Date().toISOString().split('T')[0];
     const userId = req.session.userId;
     const changes = [];
 
     if (an !== undefined) {
       await CauHinhGia.upsert({ loai_truc: 0, don_gia: parseFloat(an), ngay_ap_dung: today, nguoi_cap_nhat_id: userId });
-      changes.push(`Đơn giá ăn: ${parseFloat(an).toLocaleString('vi-VN')} đ/suất`);
+      changes.push(`Đơn giá ăn GV: ${parseFloat(an).toLocaleString('vi-VN')} đ/ca (từ ${today})`);
     }
     if (ngu !== undefined) {
       await CauHinhGia.upsert({ loai_truc: 1, don_gia: parseFloat(ngu), ngay_ap_dung: today, nguoi_cap_nhat_id: userId });
-      changes.push(`Đơn giá ngủ: ${parseFloat(ngu).toLocaleString('vi-VN')} đ/suất`);
+      changes.push(`Đơn giá ngủ GV: ${parseFloat(ngu).toLocaleString('vi-VN')} đ/ca (từ ${today})`);
+    }
+    if (tien_an_hs !== undefined) {
+      await CauHinhGia.upsert({ loai_truc: 2, don_gia: parseFloat(tien_an_hs), ngay_ap_dung: today, nguoi_cap_nhat_id: userId });
+      changes.push(`Đơn giá suất ăn HS: ${parseFloat(tien_an_hs).toLocaleString('vi-VN')} đ/ngày (từ ${today})`);
+      await CauHinhHeThong.update({ tien_an: parseFloat(tien_an_hs) }, { where: { id: 1 } });
     }
 
     if (changes.length > 0) {
@@ -1343,6 +1364,90 @@ router.post('/api/cauhinh/save/', loginRequired, roleRequired('admin', 'quan_ly'
     }
 
     return res.json({ ok: true, message: 'Lưu cấu hình giá thành công' });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── CẤU HÌNH ĐỢT THANH TOÁN (DYNAMIC PAYMENT PERIODS) ──
+
+/** GET /api/cauhinh/dot-thanh-toan/ */
+router.get('/api/cauhinh/dot-thanh-toan/', loginRequired, async (req, res) => {
+  try {
+    const { nam_hoc } = req.query;
+    const where = {};
+    if (nam_hoc) where.nam_hoc = nam_hoc;
+
+    const dots = await CauHinhDotThanhToan.findAll({
+      where,
+      order: [['nam_hoc', 'DESC'], ['dot', 'ASC']],
+      raw: true,
+    });
+    return res.json({ ok: true, dots });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** POST /api/cauhinh/dot-thanh-toan/save */
+router.post('/api/cauhinh/dot-thanh-toan/save', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+  try {
+    const { id, dot, label, tu_ngay, den_ngay, nam_hoc, ghi_chu, is_khoa } = req.body;
+    if (!dot || !tu_ngay || !den_ngay) {
+      return res.status(400).json({ ok: false, error: 'Thiếu thông tin số đợt, ngày bắt đầu hoặc ngày kết thúc' });
+    }
+
+    const payload = {
+      dot: parseInt(dot, 10),
+      label: label ? String(label).trim() : `Đợt ${dot}: ${tu_ngay} → ${den_ngay}`,
+      tu_ngay,
+      den_ngay,
+      nam_hoc: nam_hoc || '2026-2027',
+      ghi_chu: ghi_chu || null,
+      is_khoa: is_khoa === true || is_khoa === 1,
+    };
+
+    let record;
+    if (id) {
+      await CauHinhDotThanhToan.update(payload, { where: { id } });
+      record = await CauHinhDotThanhToan.findByPk(id);
+    } else {
+      record = await CauHinhDotThanhToan.create(payload);
+    }
+
+    return res.json({ ok: true, message: 'Đã lưu đợt thanh toán thành công', dot: record });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** POST /api/cauhinh/dot-thanh-toan/:id/khoa - Khóa hoặc Mở khóa sổ đợt thanh toán */
+router.post('/api/cauhinh/dot-thanh-toan/:id/khoa', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_khoa } = req.body;
+    const dot = await CauHinhDotThanhToan.findByPk(id);
+    if (!dot) return res.status(404).json({ ok: false, error: 'Không tìm thấy đợt thanh toán' });
+
+    dot.is_khoa = is_khoa !== undefined ? Boolean(is_khoa) : !dot.is_khoa;
+    await dot.save();
+
+    return res.json({ ok: true, message: dot.is_khoa ? `Đã khóa sổ ${dot.label}` : `Đã mở khóa ${dot.label}`, is_khoa: dot.is_khoa });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/** DELETE /api/cauhinh/dot-thanh-toan/:id */
+router.delete('/api/cauhinh/dot-thanh-toan/:id', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dot = await CauHinhDotThanhToan.findByPk(id);
+    if (!dot) return res.status(404).json({ ok: false, error: 'Không tìm thấy đợt thanh toán' });
+    if (dot.is_khoa) return res.status(400).json({ ok: false, error: 'Đợt thanh toán đang bị khóa sổ, không thể xóa' });
+
+    await dot.destroy();
+    return res.json({ ok: true, message: 'Đã xóa đợt thanh toán thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }

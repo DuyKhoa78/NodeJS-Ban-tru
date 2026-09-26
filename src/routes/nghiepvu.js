@@ -6,7 +6,7 @@ const NodeCache = require('node-cache');
 const {
     HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong, DiemDanhDraft,
     PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
-    BaoCaoTruc, LichSuPhanPhong
+    BaoCaoTruc, LichSuPhanPhong, CauHinhDotThanhToan, ThuTienBanTru
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
@@ -155,7 +155,8 @@ router.get('/api/phong/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'q
     try {
         const loaiStr = req.params.loai; // 'an' | 'ngu'
         const loai = loaiStr === 'an' ? 0 : 1;
-        const cacheKey = `phong_${loaiStr}`;
+        const isAll = req.query.all === 'true' || req.query.include_inactive === 'true';
+        const cacheKey = `phong_${loaiStr}_${isAll ? 'all' : 'active'}`;
 
         const cached = appCache.get(cacheKey);
         if (cached) {
@@ -163,7 +164,12 @@ router.get('/api/phong/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 'q
             return res.json({ ok: true, phong: cached });
         }
 
-        const list = await Phong.findAll({ where: { loai_phong: loai }, order: [['ma_phong', 'ASC']] });
+        const where = { loai_phong: loai };
+        if (!isAll) {
+            where.dang_dung = true;
+        }
+
+        const list = await Phong.findAll({ where, order: [['ma_phong', 'ASC']] });
         const plain = list.map(p => p.toJSON());
         appCache.set(cacheKey, plain);
         res.set('X-Cache', 'MISS');
@@ -597,6 +603,21 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
         }
 
         const reqNgay = records[0].ngay;
+
+        // Kiểm tra xem ngày điểm danh có thuộc đợt thanh toán đã bị khóa sổ không
+        const dotKhoa = await CauHinhDotThanhToan.findOne({
+            where: {
+                is_khoa: true,
+                tu_ngay: { [Op.lte]: reqNgay },
+                den_ngay: { [Op.gte]: reqNgay }
+            }
+        });
+        if (dotKhoa) {
+            return res.status(403).json({
+                ok: false,
+                error: `Đợt thanh toán "${dotKhoa.label}" đã bị khóa sổ kế toán. Không thể cập nhật điểm danh cho ngày ${reqNgay}.`
+            });
+        }
 
         // Kiểm tra quyền và khung giờ điểm danh:
         // Admin/Superuser có thể điểm danh bất kỳ lúc nào.
@@ -1179,6 +1200,21 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             return res.status(400).json({ ok: false, error: 'Thiếu dữ liệu yêu cầu' });
         }
 
+        // Kiểm tra xem ngày chốt có thuộc đợt thanh toán đã bị khóa sổ kế toán không
+        const dotKhoa = await CauHinhDotThanhToan.findOne({
+            where: {
+                is_khoa: true,
+                tu_ngay: { [Op.lte]: ngay },
+                den_ngay: { [Op.gte]: ngay }
+            }
+        });
+        if (dotKhoa) {
+            return res.status(403).json({
+                ok: false,
+                error: `Đợt thanh toán "${dotKhoa.label}" đã bị khóa sổ kế toán. Không thể chốt hoặc sửa đổi điểm danh cho ngày ${ngay}.`
+            });
+        }
+
         const loaiTrucNum = Number(loai_truc);
         const vn = getVietnamTime();
 
@@ -1224,6 +1260,8 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             }
         }
 
+        const cauhinhNgay = await CauHinhNgay.findOne({ where: { ngay } });
+
         const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
         const dbStudents = await HocSinh.findAll({
             where: {
@@ -1232,12 +1270,13 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                     { dang_hoc: true },
                     { ngay_rut: { [Op.gte]: ngay } }
                 ]
-            }
+            },
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'dang_hoc', 'ngay_vao', 'ngay_rut']
         });
 
         // Kết hợp với danh_sach_hs do client gửi lên (bảo đảm học sinh tạm/đặc biệt không bị bỏ sót)
         const studentMap = new Map();
-        dbStudents.forEach(s => studentMap.set(s.id, { id: s.id, ho_ten: s.ho_ten, lop: s.lop }));
+        dbStudents.forEach(s => studentMap.set(s.id, { id: s.id, ho_ten: s.ho_ten, lop: s.lop, ngay_vao: s.ngay_vao, ngay_rut: s.ngay_rut, dang_hoc: s.dang_hoc }));
         if (Array.isArray(danh_sach_hs)) {
             danh_sach_hs.forEach(item => {
                 if (!studentMap.has(item.id)) {
@@ -1247,11 +1286,18 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         }
         const allStudents = Array.from(studentMap.values());
 
+        // Lọc học sinh thực tế phải tham gia trong ngày (loại trừ ngày nghỉ/miễn theo CauHinhNgay và HS chưa vào/đã rút)
+        const validStudents = allStudents.filter(hs => {
+            if (hs.ngay_vao && hs.ngay_vao > ngay) return false;
+            if (hs.ngay_rut && hs.ngay_rut < ngay) return false;
+            return isHsAllowed(hs, cauhinhNgay);
+        });
+
         // Kiểm tra các bạn đã được báo Phép trước (bởi Admin)
         const existingDD = await DiemDanhHS.findAll({
             where: {
                 ngay,
-                ma_hs_id: { [Op.in]: allStudents.map(s => s.id) }
+                ma_hs_id: { [Op.in]: validStudents.map(s => s.id) }
             }
         });
         const existingMap = {};
@@ -1272,7 +1318,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             const fieldThoiGian = loaiTrucNum === 0 ? 'thoi_gian_diem_danh_an' : 'thoi_gian_diem_danh_ngu';
 
             const recordsToSave = [];
-            for (const hs of allStudents) {
+            for (const hs of validStudents) {
                 const ex = existingMap[hs.id];
                 const sc = scannedMap[hs.id];
 
@@ -1557,7 +1603,6 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
         const cuoi = addDays(tuan, 6);
 
         let gv_list = appCache.get('gv_active_list');
-        let phong_list = appCache.get('phong_all_list');
         let cauhinh = appCache.get('cauhinh_hethong');
 
         const tasks = [
@@ -1568,13 +1613,6 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
             tasks.push(GiaoVien.findAll({ where: { dang_lam: true }, attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu', 'lich_ranh'] }).then(res => {
                 const plain = res.map(r => r.toJSON());
                 appCache.set('gv_active_list', plain);
-                return plain;
-            }));
-        }
-        if (!phong_list) {
-            tasks.push(Phong.findAll({ attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] }).then(res => {
-                const plain = res.map(r => r.toJSON());
-                appCache.set('phong_all_list', plain);
                 return plain;
             }));
         }
@@ -1589,12 +1627,32 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
         const results = await Promise.all(tasks);
         const records = results[0];
 
+        // Lấy danh sách phòng: chỉ lấy phòng đang dùng (dang_dung = true),
+        // và chỉ nạp thêm phòng cũ nếu tuần này THỰC SỰ có ca trực lịch sử ở phòng đó.
+        const activePhongs = await Phong.findAll({
+            where: { dang_dung: true },
+            attributes: ['ma_phong', 'loai_phong', 'gioi_tinh', 'dang_dung'],
+            order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']]
+        });
+        const activeCodes = new Set(activePhongs.map(p => p.ma_phong));
+        const recordRoomCodes = new Set(records.map(r => r.ma_phong_id).filter(Boolean));
+        const missingHistoricalCodes = [...recordRoomCodes].filter(code => !activeCodes.has(code));
+        let extraPhongs = [];
+        if (missingHistoricalCodes.length > 0) {
+            extraPhongs = await Phong.findAll({
+                where: { ma_phong: missingHistoricalCodes },
+                attributes: ['ma_phong', 'loai_phong', 'gioi_tinh', 'dang_dung'],
+                order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']]
+            });
+        }
+        const phong_list = [...activePhongs.map(p => p.toJSON()), ...extraPhongs.map(p => p.toJSON())];
+
         return res.json({
             ok: true,
             records,
             tuan,
             gv_list: gv_list || appCache.get('gv_active_list') || [],
-            phong_list: phong_list || appCache.get('phong_all_list') || [],
+            phong_list,
             nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2026-2027',
             nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
             ten_truong: cauhinh?.ten_truong || appCache.get('cauhinh_hethong')?.ten_truong || 'LÊ THỊ HỒNG GẤM'
@@ -2562,7 +2620,7 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
             so_nam: year,
             ngay_ban_tru: ngayBanTru,
             tong_buoi_bantru: ngayBanTru.length,
-            phong_list: phongList.map(p => p.ma_phong),
+            phong_list: phongList.filter(p => p.dang_dung || (dataByPhong[p.ma_phong] && dataByPhong[p.ma_phong].length > 0)).map(p => p.ma_phong),
             data: dataByPhong,
             ngay_dac_biet_map: ngayDacBietMapAn,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
             nam_hoc: cauhinh.nam_hoc,
@@ -2693,7 +2751,7 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
             so_thang: month, so_nam: year,
             ngay_ban_tru: ngayBanTru,
             tong_buoi_bantru: ngayBanTru.length,
-            phong_list: phongList.map(p => p.ma_phong),
+            phong_list: phongList.filter(p => p.dang_dung || (dataByPhong[p.ma_phong] && dataByPhong[p.ma_phong].length > 0)).map(p => p.ma_phong),
             data: dataByPhong,
             ngay_dac_biet_map: ngayDacBietMapNgu,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
             nam_hoc: cauhinh.nam_hoc,
@@ -2707,7 +2765,7 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
  * Tổng hợp chuyên cần và tính tiền ăn/ngủ theo từng HS, gom theo lớp
  * Lấy cả học sinh rút bán trú trong tháng để tính tiền chính xác
  */
-router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
+router.get('/api/baocao/tong-hop-lop/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
     try {
         const { thang, nam, lop, tu_ngay, den_ngay, dot } = req.query;
         const year = parseInt(nam) || new Date().getFullYear();
@@ -2774,7 +2832,7 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
             ddMap[r.ma_hs_id][r.ngay] = { an: r.diem_danh_an, ngu: r.diem_danh_ngu };
         });
 
-        // 5. Giá ăn từ Thiết lập hệ thống (hoặc từ tham số query nếu có)
+        // 5. Giá ăn từ Cấu hình giá (loại 2 = Suất ăn HS) hoặc Thiết lập hệ thống
         const [cauhinh] = await CauHinhHeThong.findOrCreate({
             where: { id: 1 },
             defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Người phụ trách', tien_an: 38000 }
@@ -2783,7 +2841,22 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
         const customGiaAn = (req.query.don_gia_an !== undefined && req.query.don_gia_an !== '' && req.query.don_gia_an !== 'null')
             ? parseFloat(req.query.don_gia_an)
             : null;
-        const giaAn = (customGiaAn !== null && !isNaN(customGiaAn) && customGiaAn > 0) ? customGiaAn : defaultTienAn;
+
+        // Lấy lịch sử giá suất ăn HS
+        const allGiaTienAnHS = await CauHinhGia.findAll({
+            where: { loai_truc: 2, ngay_ap_dung: { [Op.lte]: end } },
+            order: [['ngay_ap_dung', 'ASC']],
+            raw: true,
+        });
+
+        const getDonGiaTienAnHS = (ngay) => {
+            if (customGiaAn !== null && !isNaN(customGiaAn) && customGiaAn > 0) {
+                return customGiaAn;
+            }
+            const matched = allGiaTienAnHS.filter(g => g.ngay_ap_dung <= ngay).pop();
+            return matched ? parseFloat(matched.don_gia) : defaultTienAn;
+        };
+        const giaAn = (customGiaAn !== null && !isNaN(customGiaAn) && customGiaAn > 0) ? customGiaAn : getDonGiaTienAnHS(end);
         const giaNgu = 0;
 
         // 6. Tính toán từng HS
@@ -2811,7 +2884,13 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
 
             const buoiAnThucTe = coMatAn;
             const buoiNguThucTe = coMatNgu;
-            const tienAn = (phaiAn.length - phepAn) * giaAn; // Vắng không trừ tiền, chỉ phép mới trừ
+
+            let tienAn = 0;
+            phaiAn.forEach(ng => {
+                if (recs[ng]?.an !== 2) { // Không có phép (vắng vẫn tính tiền ăn, chỉ phép mới trừ)
+                    tienAn += getDonGiaTienAnHS(ng);
+                }
+            });
             const tienNgu = (phaiNgu.length - phepNgu) * giaNgu;
 
             // Ghi chú thời gian vào / rút bán trú
@@ -3077,7 +3156,7 @@ router.get('/api/baocao/suat-an-thang/', loginRequired, async (req, res) => {
 });
 
 /** GET /api/baocao/luong-gv/?tu_ngay=&den_ngay=&thang=&nam= */
-router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
+router.get('/api/baocao/luong-gv/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
     try {
         let start, end;
         if (req.query.tu_ngay && req.query.den_ngay) {
@@ -3111,11 +3190,26 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
             });
         }
 
-        const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
-        const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1, ngay_ap_dung: { [Op.lte]: end } }, order: [['ngay_ap_dung', 'DESC']] });
+        // Lấy toàn bộ lịch sử đơn giá có hiệu lực đến effectiveEnd
+        const allCauHinhGia = await CauHinhGia.findAll({
+            where: {
+                loai_truc: { [Op.in]: [0, 1] },
+                ngay_ap_dung: { [Op.lte]: effectiveEnd }
+            },
+            order: [['ngay_ap_dung', 'ASC']],
+            raw: true
+        });
 
-        const don_gia_an = giaAn ? parseFloat(giaAn.don_gia) : 0;
-        const don_gia_ngu = giaNgu ? parseFloat(giaNgu.don_gia) : 0;
+        const getDonGiaGV = (ngay, loaiTruc) => {
+            const matched = allCauHinhGia
+                .filter(g => g.loai_truc === loaiTruc && g.ngay_ap_dung <= ngay)
+                .pop();
+            if (matched) return parseFloat(matched.don_gia);
+            return loaiTruc === 0 ? 100000 : 180000;
+        };
+
+        const don_gia_an = getDonGiaGV(effectiveEnd, 0);
+        const don_gia_ngu = getDonGiaGV(effectiveEnd, 1);
 
         // Đếm lượt trực DISTINCT theo (người trực thực tế, ca của giáo viên gốc, ngày, ca)
         const gvMap = {};
@@ -3163,13 +3257,14 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
             if (seenShift.has(shiftKey)) return; // Tránh tính trùng nếu 1 người trực nhiều phòng trong cùng 1 ca
             seenShift.add(shiftKey);
 
+            const donGia = getDonGiaGV(pc.ngay, pc.loai_truc);
             if (pc.loai_truc === 0) {
                 gvMap[actualId].so_ca_an++;
-                gvMap[actualId].tong_tien += don_gia_an;
+                gvMap[actualId].tong_tien += donGia;
                 gvMap[actualId].ngay_an.push(pc.ngay);
             } else {
                 gvMap[actualId].so_ca_ngu++;
-                gvMap[actualId].tong_tien += don_gia_ngu;
+                gvMap[actualId].tong_tien += donGia;
                 gvMap[actualId].ngay_ngu.push(pc.ngay);
             }
 
@@ -3814,9 +3909,8 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
         const vangNum = parseInt(bodyObj.so_hs_vang, 10) || 0;
         const maNhap = String(bodyObj.ma_xac_thuc || bodyObj.sdt_xac_nhan || '').trim().toUpperCase();
 
-        let isHopLe = true;
         let matchedTeacher = null;
-        let hoTenChuan = String(ho_ten_gv_raw).trim();
+        let hoTenChuan = String(ho_ten_gv_raw || '').trim();
 
         if (maNhap) {
             matchedTeacher = await GiaoVien.findOne({
@@ -3830,6 +3924,25 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
         // Đảm bảo họ tên chuẩn xác khi lưu vào CSDL (Quan -> Quang: Hồ Quang Thịnh)
         if (/hồ\s*quan\s*thịnh/i.test(hoTenChuan) || /^quan\s*thịnh$/i.test(hoTenChuan)) {
             hoTenChuan = 'Hồ Quang Thịnh';
+        }
+
+        // Báo cáo chỉ hợp lệ khi:
+        // 1. Có mã xác thực được nhập
+        // 2. Mã xác thực khớp với một giáo viên trong CSDL
+        // 3. Nếu form có gửi tên GV, tên GV đó phải tương đồng với GV sở hữu mã bảo mật
+        let isHopLe = false;
+        if (maNhap && matchedTeacher) {
+            if (ho_ten_gv_raw && String(ho_ten_gv_raw).trim()) {
+                const inputNameLower = String(ho_ten_gv_raw).trim().toLowerCase();
+                const matchedNameLower = matchedTeacher.ho_ten.trim().toLowerCase();
+                if (inputNameLower === matchedNameLower || matchedNameLower.includes(inputNameLower) || inputNameLower.includes(matchedNameLower)) {
+                    isHopLe = true;
+                } else {
+                    isHopLe = false;
+                }
+            } else {
+                isHopLe = true;
+            }
         }
 
         const record = await BaoCaoTruc.create({
@@ -4054,9 +4167,15 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
         const coVangRecords = records.filter(r => (r.danh_sach_vang && r.danh_sach_vang.trim()) || (r.so_hs_vang && r.so_hs_vang > 0));
 
         // Thống kê theo GV (tổng ca ăn, ca ngủ, giám sát của từng GV trong tuần/tháng)
+        // Deduplicate theo (ho_ten_gv, ngay, ca_truc) để GV trực/báo cáo nhiều phòng trong 1 ca chỉ tính 1 công
         const gvSummaryMap = {};
+        const seenGVShift = new Set();
         records.forEach(r => {
-            const gvName = r.ho_ten_gv || 'Khác';
+            const gvName = (r.ho_ten_gv || 'Khác').trim();
+            const shiftKey = `${gvName.toLowerCase()}_${r.ngay}_${r.ca_truc}`;
+            if (seenGVShift.has(shiftKey)) return;
+            seenGVShift.add(shiftKey);
+
             if (!gvSummaryMap[gvName]) {
                 gvSummaryMap[gvName] = { ho_ten: gvName, so_ca_an: 0, so_ca_ngu: 0, so_ca_giam_sat: 0, tong_ca: 0 };
             }
@@ -4201,6 +4320,509 @@ router.post('/api/baocaotruc/update/', loginRequired, async (req, res) => {
         await record.save();
 
         return res.json({ ok: true, message: 'Đã cập nhật bản ghi báo cáo thành công', record });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// TÀI CHÍNH & SỔ THU TIỀN BÁN TRÚ (ThuTienBanTru)
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/taichinh/so-thu-tien/
+ * Lấy danh sách thu tiền bán trú theo Đợt hoặc Tháng
+ */
+router.get('/api/taichinh/so-thu-tien/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const { dot, thang, nam, lop, nam_hoc } = req.query;
+        let start, end, dotObj = null, isKhoa = false;
+
+        const currentYear = parseInt(nam, 10) || new Date().getFullYear();
+
+        if (dot) {
+            dotObj = await CauHinhDotThanhToan.findOne({
+                where: { dot: parseInt(dot, 10), ...(nam_hoc ? { nam_hoc } : {}) }
+            });
+            if (dotObj) {
+                start = dotObj.tu_ngay;
+                end = dotObj.den_ngay;
+                isKhoa = Boolean(dotObj.is_khoa);
+            }
+        }
+
+        if (!start || !end) {
+            const m = parseInt(thang, 10) || (new Date().getMonth() + 1);
+            start = `${currentYear}-${String(m).padStart(2, '0')}-01`;
+            end = getLastDayYMD(currentYear, m);
+            // Kiểm tra xem khoảng ngày này có bị khóa bởi đợt nào không
+            const lockedDot = await CauHinhDotThanhToan.findOne({
+                where: {
+                    is_khoa: true,
+                    tu_ngay: { [Op.lte]: end },
+                    den_ngay: { [Op.gte]: start }
+                }
+            });
+            if (lockedDot) isKhoa = true;
+        }
+
+        // Lấy danh sách ngày có ca ăn bán trú
+        const pcAn = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+            raw: true
+        });
+        const ngayAn = pcAn.map(r => r.ngay).sort();
+
+        // Lấy cấu hình giá ăn HS
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({
+            where: { id: 1 },
+            defaults: { nam_hoc: '2026-2027', tien_an: 38000 }
+        });
+        const defaultTienAn = cauhinh?.tien_an || 38000;
+        const allGiaTienAnHS = await CauHinhGia.findAll({
+            where: { loai_truc: 2, ngay_ap_dung: { [Op.lte]: end } },
+            order: [['ngay_ap_dung', 'ASC']],
+            raw: true
+        });
+        const getDonGiaHS = (ngay) => {
+            const matched = allGiaTienAnHS.filter(g => g.ngay_ap_dung <= ngay).pop();
+            return matched ? parseFloat(matched.don_gia) : defaultTienAn;
+        };
+
+        // Lấy danh sách HS hợp lệ trong kỳ
+        const hsWhere = {
+            [Op.and]: [
+                {
+                    [Op.or]: [
+                        { dang_hoc: true },
+                        { ngay_rut: { [Op.gte]: start } }
+                    ]
+                },
+                {
+                    [Op.or]: [
+                        { ngay_vao: null },
+                        { ngay_vao: { [Op.lte]: end } }
+                    ]
+                }
+            ]
+        };
+        if (lop) hsWhere.lop = lop;
+
+        const hsList = await HocSinh.findAll({
+            where: hsWhere,
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'dang_hoc', 'ngay_vao', 'ngay_rut'],
+            order: [['lop', 'ASC'], ['ho_ten', 'ASC']]
+        });
+        const hsIds = hsList.map(h => h.id);
+
+        // Lấy cấu hình ngày đặc biệt
+        const cauhinhNgayList = await CauHinhNgay.findAll({ where: { ngay: { [Op.between]: [start, end] } } });
+        const cauhinhNgayMap = {};
+        cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+
+        // Lấy điểm danh ăn của HS
+        const ddRecords = await DiemDanhHS.findAll({
+            where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an']
+        });
+        const ddMap = {};
+        ddRecords.forEach(r => {
+            if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
+            ddMap[r.ma_hs_id][r.ngay] = r.diem_danh_an;
+        });
+
+        // Lấy các bản ghi ThuTienBanTru đã có trong CSDL
+        const ttWhere = {
+            ma_hs_id: { [Op.in]: hsIds },
+            nam: currentYear
+        };
+        if (dot) ttWhere.dot = parseInt(dot, 10);
+        else if (thang) ttWhere.thang = parseInt(thang, 10);
+
+        const thuTienRecords = await ThuTienBanTru.findAll({
+            where: ttWhere,
+            include: [{ model: StaffUser, as: 'nguoi_thu', attributes: ['id', 'username', 'fullname'] }]
+        });
+        const ttMap = {};
+        thuTienRecords.forEach(r => { ttMap[r.ma_hs_id] = r; });
+
+        let tongPhaiThu = 0;
+        let tongDaThu = 0;
+        let tongMienGiam = 0;
+        let tongConLai = 0;
+        let countDaThu = 0;
+        let countChuaThu = 0;
+
+        const data = hsList.map(hs => {
+            const recs = ddMap[hs.id] || {};
+            const existingTT = ttMap[hs.id];
+
+            // Tính số ngày phải ăn theo lịch
+            const phaiAn = ngayAn.filter(ngay => {
+                if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
+                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
+            });
+
+            // Tiền ăn thực tế phải nộp (ngày nghỉ có phép trừ tiền)
+            let calculatedPhaiThu = 0;
+            let soBuoiAn = 0;
+            let soBuoiPhep = 0;
+            phaiAn.forEach(ng => {
+                if (recs[ng] === 2) {
+                    soBuoiPhep++;
+                } else {
+                    soBuoiAn++;
+                    calculatedPhaiThu += getDonGiaHS(ng);
+                }
+            });
+
+            const soTienPhaiThu = existingTT ? parseFloat(existingTT.so_tien_phai_thu) : calculatedPhaiThu;
+            const soTienDaThu = existingTT ? parseFloat(existingTT.so_tien_da_thu) : 0;
+            const soTienMienGiam = existingTT ? parseFloat(existingTT.so_tien_mien_giam) : 0;
+            const conLai = Math.max(0, soTienPhaiThu - soTienDaThu - soTienMienGiam);
+
+            let trangThai = 0;
+            if (existingTT) {
+                trangThai = existingTT.trang_thai;
+            } else {
+                if (soTienMienGiam >= soTienPhaiThu && soTienPhaiThu > 0) trangThai = 3;
+                else if (soTienDaThu >= soTienPhaiThu && soTienPhaiThu > 0) trangThai = 1;
+                else if (soTienDaThu > 0) trangThai = 2;
+                else trangThai = 0;
+            }
+
+            if (trangThai === 1 || trangThai === 3) countDaThu++;
+            else countChuaThu++;
+
+            tongPhaiThu += soTienPhaiThu;
+            tongDaThu += soTienDaThu;
+            tongMienGiam += soTienMienGiam;
+            tongConLai += conLai;
+
+            return {
+                id: existingTT ? existingTT.id : null,
+                ma_hs_id: hs.id,
+                ho_ten: hs.ho_ten,
+                lop: hs.lop,
+                gioi_tinh: hs.gioi_tinh,
+                dang_hoc: hs.dang_hoc,
+                ngay_vao: hs.ngay_vao,
+                ngay_rut: hs.ngay_rut,
+                tong_buoi_an: phaiAn.length,
+                so_buoi_an: soBuoiAn,
+                so_buoi_phep: soBuoiPhep,
+                so_phieu: existingTT?.so_phieu || '',
+                so_tien_phai_thu: soTienPhaiThu,
+                so_tien_da_thu: soTienDaThu,
+                so_tien_mien_giam: soTienMienGiam,
+                ly_do_mien_giam: existingTT?.ly_do_mien_giam || '',
+                con_lai: conLai,
+                trang_thai: trangThai,
+                hinh_thuc_thu: existingTT?.hinh_thuc_thu || '',
+                ngay_thu: existingTT?.ngay_thu || null,
+                nguoi_thu: existingTT?.nguoi_thu?.fullname || existingTT?.nguoi_thu?.username || '',
+                ghi_chu: existingTT?.ghi_chu || '',
+                is_khoa: Boolean(isKhoa || existingTT?.is_khoa)
+            };
+        });
+
+        return res.json({
+            ok: true,
+            dot: dot ? parseInt(dot, 10) : null,
+            thang: thang ? parseInt(thang, 10) : null,
+            nam: currentYear,
+            tu_ngay: start,
+            den_ngay: end,
+            is_khoa: isKhoa,
+            dot_label: dotObj?.label || `Tháng ${thang}/${currentYear}`,
+            summary: {
+                tong_hs: data.length,
+                tong_phai_thu: tongPhaiThu,
+                tong_da_thu: tongDaThu,
+                tong_mien_giam: tongMienGiam,
+                tong_con_lai: tongConLai,
+                so_hs_da_thu: countDaThu,
+                so_hs_chua_thu: countChuaThu
+            },
+            data
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/**
+ * POST /api/taichinh/thu-tien/
+ * Thu tiền bán trú cho học sinh (hoặc cập nhật phiếu thu)
+ */
+router.post('/api/taichinh/thu-tien/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+    try {
+        const { ma_hs_id, dot, thang, nam, so_tien_da_thu, hinh_thuc_thu, so_phieu, ghi_chu, ngay_thu, so_tien_phai_thu } = req.body;
+        if (!ma_hs_id) {
+            return res.status(400).json({ ok: false, error: 'Thiếu mã học sinh' });
+        }
+
+        const currentYear = parseInt(nam, 10) || new Date().getFullYear();
+        const dotNum = dot ? parseInt(dot, 10) : null;
+        const thangNum = thang ? parseInt(thang, 10) : null;
+
+        // Kiểm tra khóa sổ đợt
+        if (dotNum) {
+            const dotObj = await CauHinhDotThanhToan.findOne({ where: { dot: dotNum } });
+            if (dotObj && dotObj.is_khoa) {
+                return res.status(403).json({ ok: false, error: `Đợt thanh toán "${dotObj.label}" đã bị khóa sổ. Không thể thu tiền hoặc cập nhật.` });
+            }
+        }
+
+        let record = await ThuTienBanTru.findOne({
+            where: {
+                ma_hs_id,
+                dot: dotNum,
+                thang: thangNum,
+                nam: currentYear
+            }
+        });
+
+        if (record && record.is_khoa) {
+            return res.status(403).json({ ok: false, error: 'Bản ghi thu tiền này đã bị khóa sổ kế toán.' });
+        }
+
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const defaultSoPhieu = `PT-${dotNum ? `D${dotNum}` : `T${thangNum}`}-${currentYear}-${ma_hs_id}`;
+
+        const phaiThu = (so_tien_phai_thu !== undefined) ? parseFloat(so_tien_phai_thu) : (record ? parseFloat(record.so_tien_phai_thu) : 0);
+        const daThu = parseFloat(so_tien_da_thu) || 0;
+        const mienGiam = record ? parseFloat(record.so_tien_mien_giam) : 0;
+
+        let trangThai = 0;
+        if (mienGiam >= phaiThu && phaiThu > 0) trangThai = 3;
+        else if (daThu + mienGiam >= phaiThu && phaiThu > 0) trangThai = 1;
+        else if (daThu > 0) trangThai = 2;
+        else trangThai = 0;
+
+        if (!record) {
+            record = await ThuTienBanTru.create({
+                ma_hs_id,
+                dot: dotNum,
+                thang: thangNum,
+                nam: currentYear,
+                so_phieu: so_phieu || defaultSoPhieu,
+                so_tien_phai_thu: phaiThu,
+                so_tien_da_thu: daThu,
+                so_tien_mien_giam: mienGiam,
+                trang_thai: trangThai,
+                hinh_thuc_thu: hinh_thuc_thu || 'tien_mat',
+                ngay_thu: ngay_thu || today,
+                nguoi_thu_id: req.user.id,
+                ghi_chu: ghi_chu || null
+            });
+        } else {
+            record.so_tien_da_thu = daThu;
+            if (so_tien_phai_thu !== undefined) record.so_tien_phai_thu = phaiThu;
+            record.trang_thai = trangThai;
+            if (hinh_thuc_thu) record.hinh_thuc_thu = hinh_thuc_thu;
+            if (so_phieu) record.so_phieu = so_phieu;
+            record.ngay_thu = ngay_thu || record.ngay_thu || today;
+            record.nguoi_thu_id = req.user.id;
+            if (ghi_chu !== undefined) record.ghi_chu = ghi_chu;
+            await record.save();
+        }
+
+        return res.json({ ok: true, message: 'Lưu thông tin thu tiền thành công', record });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/**
+ * POST /api/taichinh/mien-giam/
+ * Cập nhật số tiền miễn giảm & lý do cho học sinh
+ */
+router.post('/api/taichinh/mien-giam/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+    try {
+        const { ma_hs_id, dot, thang, nam, so_tien_mien_giam, ly_do_mien_giam, so_tien_phai_thu } = req.body;
+        if (!ma_hs_id) {
+            return res.status(400).json({ ok: false, error: 'Thiếu mã học sinh' });
+        }
+
+        const currentYear = parseInt(nam, 10) || new Date().getFullYear();
+        const dotNum = dot ? parseInt(dot, 10) : null;
+        const thangNum = thang ? parseInt(thang, 10) : null;
+
+        if (dotNum) {
+            const dotObj = await CauHinhDotThanhToan.findOne({ where: { dot: dotNum } });
+            if (dotObj && dotObj.is_khoa) {
+                return res.status(403).json({ ok: false, error: `Đợt thanh toán "${dotObj.label}" đã bị khóa sổ.` });
+            }
+        }
+
+        let record = await ThuTienBanTru.findOne({
+            where: { ma_hs_id, dot: dotNum, thang: thangNum, nam: currentYear }
+        });
+
+        if (record && record.is_khoa) {
+            return res.status(403).json({ ok: false, error: 'Bản ghi này đã bị khóa sổ kế toán.' });
+        }
+
+        const phaiThu = (so_tien_phai_thu !== undefined) ? parseFloat(so_tien_phai_thu) : (record ? parseFloat(record.so_tien_phai_thu) : 0);
+        const daThu = record ? parseFloat(record.so_tien_da_thu) : 0;
+        const mienGiam = parseFloat(so_tien_mien_giam) || 0;
+
+        let trangThai = 0;
+        if (mienGiam >= phaiThu && phaiThu > 0) trangThai = 3;
+        else if (daThu + mienGiam >= phaiThu && phaiThu > 0) trangThai = 1;
+        else if (daThu > 0) trangThai = 2;
+        else trangThai = 0;
+
+        if (!record) {
+            record = await ThuTienBanTru.create({
+                ma_hs_id,
+                dot: dotNum,
+                thang: thangNum,
+                nam: currentYear,
+                so_tien_phai_thu: phaiThu,
+                so_tien_da_thu: daThu,
+                so_tien_mien_giam: mienGiam,
+                ly_do_mien_giam: ly_do_mien_giam || null,
+                trang_thai: trangThai,
+                nguoi_thu_id: req.user.id
+            });
+        } else {
+            record.so_tien_mien_giam = mienGiam;
+            if (ly_do_mien_giam !== undefined) record.ly_do_mien_giam = ly_do_mien_giam;
+            if (so_tien_phai_thu !== undefined) record.so_tien_phai_thu = phaiThu;
+            record.trang_thai = trangThai;
+            await record.save();
+        }
+
+        return res.json({ ok: true, message: 'Cập nhật miễn giảm thành công', record });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/**
+ * POST /api/taichinh/dong-bo-phai-thu/
+ * Đồng bộ toàn bộ số tiền phải thu từ dữ liệu điểm danh sang bảng ThuTienBanTru
+ */
+router.post('/api/taichinh/dong-bo-phai-thu/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan'), async (req, res) => {
+    try {
+        const { dot, thang, nam, nam_hoc } = req.body;
+        const currentYear = parseInt(nam, 10) || new Date().getFullYear();
+        const dotNum = dot ? parseInt(dot, 10) : null;
+        const thangNum = thang ? parseInt(thang, 10) : null;
+
+        let start, end;
+        if (dotNum) {
+            const dotObj = await CauHinhDotThanhToan.findOne({
+                where: { dot: dotNum, ...(nam_hoc ? { nam_hoc } : {}) }
+            });
+            if (!dotObj) return res.status(404).json({ ok: false, error: 'Không tìm thấy cấu hình đợt thanh toán' });
+            if (dotObj.is_khoa) return res.status(403).json({ ok: false, error: `Đợt thanh toán "${dotObj.label}" đã bị khóa sổ.` });
+            start = dotObj.tu_ngay;
+            end = dotObj.den_ngay;
+        } else {
+            const m = thangNum || (new Date().getMonth() + 1);
+            start = `${currentYear}-${String(m).padStart(2, '0')}-01`;
+            end = getLastDayYMD(currentYear, m);
+        }
+
+        // Lấy ngày bán trú ăn
+        const pcAn = await PhanCongTrucGV.findAll({
+            where: { ngay: { [Op.between]: [start, end] }, loai_truc: 0 },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('ngay')), 'ngay']],
+            raw: true
+        });
+        const ngayAn = pcAn.map(r => r.ngay).sort();
+
+        // Lấy giá ăn HS
+        const [cauhinh] = await CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { tien_an: 38000 } });
+        const defaultTienAn = cauhinh?.tien_an || 38000;
+        const allGiaTienAnHS = await CauHinhGia.findAll({
+            where: { loai_truc: 2, ngay_ap_dung: { [Op.lte]: end } },
+            order: [['ngay_ap_dung', 'ASC']],
+            raw: true
+        });
+        const getDonGiaHS = (ngay) => {
+            const matched = allGiaTienAnHS.filter(g => g.ngay_ap_dung <= ngay).pop();
+            return matched ? parseFloat(matched.don_gia) : defaultTienAn;
+        };
+
+        const hsList = await HocSinh.findAll({
+            where: {
+                [Op.and]: [
+                    { [Op.or]: [{ dang_hoc: true }, { ngay_rut: { [Op.gte]: start } }] },
+                    { [Op.or]: [{ ngay_vao: null }, { ngay_vao: { [Op.lte]: end } }] }
+                ]
+            },
+            attributes: ['id', 'ngay_vao', 'ngay_rut', 'lop']
+        });
+        const hsIds = hsList.map(h => h.id);
+
+        const cauhinhNgayList = await CauHinhNgay.findAll({ where: { ngay: { [Op.between]: [start, end] } } });
+        const cauhinhNgayMap = {};
+        cauhinhNgayList.forEach(c => { cauhinhNgayMap[c.ngay] = c; });
+
+        const ddRecords = await DiemDanhHS.findAll({
+            where: { ma_hs_id: { [Op.in]: hsIds }, ngay: { [Op.between]: [start, end] } },
+            attributes: ['ma_hs_id', 'ngay', 'diem_danh_an']
+        });
+        const ddMap = {};
+        ddRecords.forEach(r => {
+            if (!ddMap[r.ma_hs_id]) ddMap[r.ma_hs_id] = {};
+            ddMap[r.ma_hs_id][r.ngay] = r.diem_danh_an;
+        });
+
+        let updatedCount = 0;
+        for (const hs of hsList) {
+            const recs = ddMap[hs.id] || {};
+            const phaiAn = ngayAn.filter(ngay => {
+                if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
+                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
+            });
+
+            let phaiThu = 0;
+            phaiAn.forEach(ng => {
+                if (recs[ng] !== 2) {
+                    phaiThu += getDonGiaHS(ng);
+                }
+            });
+
+            const existing = await ThuTienBanTru.findOne({
+                where: { ma_hs_id: hs.id, dot: dotNum, thang: thangNum, nam: currentYear }
+            });
+
+            if (existing) {
+                if (!existing.is_khoa) {
+                    existing.so_tien_phai_thu = phaiThu;
+                    const daThu = parseFloat(existing.so_tien_da_thu) || 0;
+                    const mienGiam = parseFloat(existing.so_tien_mien_giam) || 0;
+                    if (mienGiam >= phaiThu && phaiThu > 0) existing.trang_thai = 3;
+                    else if (daThu + mienGiam >= phaiThu && phaiThu > 0) existing.trang_thai = 1;
+                    else if (daThu > 0) existing.trang_thai = 2;
+                    else existing.trang_thai = 0;
+                    await existing.save();
+                    updatedCount++;
+                }
+            } else {
+                await ThuTienBanTru.create({
+                    ma_hs_id: hs.id,
+                    dot: dotNum,
+                    thang: thangNum,
+                    nam: currentYear,
+                    so_tien_phai_thu: phaiThu,
+                    so_tien_da_thu: 0,
+                    so_tien_mien_giam: 0,
+                    trang_thai: 0
+                });
+                updatedCount++;
+            }
+        }
+
+        return res.json({ ok: true, message: `Đồng bộ thành công ${updatedCount} học sinh`, updatedCount });
     } catch (err) {
         return res.status(500).json({ ok: false, error: err.message });
     }
