@@ -33,6 +33,12 @@ function addDays(dateStr, n) {
     return d.toISOString().split('T')[0];
 }
 function toDate(str) { return new Date(str).toISOString().split('T')[0]; }
+function getLastDayYMD(year, month) {
+    const y = parseInt(year, 10);
+    const m = parseInt(month, 10);
+    const lastDay = new Date(y, m, 0).getDate();
+    return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+}
 
 /** Điều kiện lọc ca trực mà giáo viên gvId thực tế đang chịu trách nhiệm (bao gồm trực thay, loại trừ ca đã có người khác trực thay) */
 function getTeacherActiveDutyCondition(gvId) {
@@ -1601,7 +1607,7 @@ router.get('/api/lichtruc/month/', loginRequired, async (req, res) => {
     try {
         const [year, month] = (req.query.thang || new Date().toISOString().slice(0, 7)).split('-');
         const start = `${year}-${month}-01`;
-        const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+        const end = getLastDayYMD(year, month);
         const records = await PhanCongTrucGV.findAll({
             where: { ngay: { [Op.between]: [start, end] } },
             include: [{ association: 'giao_vien', attributes: ['id', 'ho_ten'] }, { association: 'phong', attributes: ['ma_phong', 'loai_phong'] }],
@@ -1615,7 +1621,9 @@ const ALLOWED_CLUSTERS = [
     ['P6', 'P7', 'P8'],
     ['P3', 'P4', 'P5'],
     ['D21', 'D22', 'D23'],
+    ['D11', 'D12', 'D13'],
     ['D31', 'D32', 'D33'],
+    ['D41', 'D42', 'D43'],
     ['C11', 'C12'],
     ['C13', 'C14']
 ];
@@ -1692,13 +1700,6 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
                 if (existing.ma_phong_id === ma_phong_id) {
                     await t.rollback();
                     return res.status(400).json({ ok: false, error: `Giáo viên ${targetGv.ho_ten} đã có trong danh sách phân công tại phòng ${ma_phong_id} trong ca trực này rồi.` });
-                }
-                if (!areRoomsInSameCluster(existing.ma_phong_id, ma_phong_id)) {
-                    await t.rollback();
-                    return res.status(400).json({
-                        ok: false,
-                        error: `Giáo viên ${targetGv.ho_ten} đang trực phòng ${existing.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không thuộc cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33, C11-C12, C13-C14).`
-                    });
                 }
             }
         }
@@ -1970,26 +1971,7 @@ router.post('/api/lichtruc_khung/save/', loginRequired, roleRequired('admin', 'q
             return res.status(400).json({ ok: false, error: `Phòng ngủ ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} chỉ cho phép giáo viên ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} trực.` });
         }
 
-        // 3. Ràng buộc cụm phòng liên thông trong cùng thứ và cùng ca
-        const existingKhung = await LichTrucCoDinh.findAll({
-            where: { ma_gv_id, thu: parseInt(thu) },
-            include: [{ association: 'phong', attributes: ['loai_phong'] }],
-            transaction: t
-        });
-
-        for (const ex of existingKhung) {
-            if (ex.phong && ex.phong.loai_phong === phong.loai_phong && ex.ma_phong_id !== ma_phong_id) {
-                if (!areRoomsInSameCluster(ex.ma_phong_id, ma_phong_id)) {
-                    await t.rollback();
-                    return res.status(400).json({
-                        ok: false,
-                        error: `Giáo viên ${gv.ho_ten} đã được xếp lịch khung ở phòng ${ex.ma_phong_id}. Không thể phân công thêm phòng ${ma_phong_id} vì không cùng cụm phòng liên thông cho phép (P3-P5, P6-P8, D21-D23, D31-D33, C11-C12, C13-C14).`
-                    });
-                }
-            }
-        }
-
-        // 4. Kiểm tra giới hạn số lượng GV theo nhiem_vu
+        // 3. Kiểm tra giới hạn số lượng GV theo nhiem_vu
         const slToiDa = nhiem_vu === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
         const hienTai = await LichTrucCoDinh.count({
             where: { ma_phong_id, thu: parseInt(thu), nhiem_vu: parseInt(nhiem_vu) },
@@ -2281,7 +2263,7 @@ router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
         const year = nam || new Date().getFullYear();
         const month = thang || (new Date().getMonth() + 1);
         const start = `${year}-${String(month).padStart(2, '0')}-01`;
-        const end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+        const end = getLastDayYMD(year, month);
 
         const hsWhere = { dang_hoc: true };
         if (lop) hsWhere.lop = lop;
@@ -2456,7 +2438,7 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
         const year = parseInt(nam) || new Date().getFullYear();
         const month = parseInt(thang) || (new Date().getMonth() + 1);
         const start = `${year}-${String(month).padStart(2, '0')}-01`;
-        const end = new Date(year, month, 0).toISOString().split('T')[0];
+        const end = getLastDayYMD(year, month);
 
         // 1. Lấy các ngày thực sự có bán trú (ăn) trong tháng từ PhanCongTrucGV
         const phanCongRecords = await PhanCongTrucGV.findAll({
@@ -2596,7 +2578,7 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
         const year = parseInt(nam) || new Date().getFullYear();
         const month = parseInt(thang) || (new Date().getMonth() + 1);
         const start = `${year}-${String(month).padStart(2, '0')}-01`;
-        const end = new Date(year, month, 0).toISOString().split('T')[0];
+        const end = getLastDayYMD(year, month);
 
         // 1. Các ngày có bán trú (ngủ) từ PhanCongTrucGV
         const phanCongRecords = await PhanCongTrucGV.findAll({
@@ -2731,7 +2713,7 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
         const year = parseInt(nam) || new Date().getFullYear();
         const month = parseInt(thang) || (new Date().getMonth() + 1);
         const start = tu_ngay || `${year}-${String(month).padStart(2, '0')}-01`;
-        const end = den_ngay || new Date(year, month, 0).toISOString().split('T')[0];
+        const end = den_ngay || getLastDayYMD(year, month);
 
         // 1. Ngày bán trú ăn & ngủ
         const [pcAn, pcNgu] = await Promise.all([
@@ -2821,11 +2803,11 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, async (req, res) => {
 
             const vangAn = phaiAn.filter(ng => recs[ng]?.an === 1).length;
             const phepAn = phaiAn.filter(ng => recs[ng]?.an === 2).length;
-            const coMatAn = phaiAn.length - vangAn - phepAn; // Thực tế là những buổi có mặt (kể cả chưa chốt điểm danh)
+            const coMatAn = phaiAn.filter(ng => recs[ng]?.an === 0).length; // Chỉ tính những buổi thực tế điểm danh có mặt (an === 0)
 
             const vangNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 1).length;
             const phepNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 2).length;
-            const coMatNgu = phaiNgu.length - vangNgu - phepNgu;
+            const coMatNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 0).length;
 
             const buoiAnThucTe = coMatAn;
             const buoiNguThucTe = coMatNgu;
@@ -3105,7 +3087,7 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
             const year = req.query.nam || new Date().getFullYear();
             const month = req.query.thang || (new Date().getMonth() + 1);
             start = `${year}-${String(month).padStart(2, '0')}-01`;
-            end = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+            end = getLastDayYMD(year, month);
         }
 
         // Lấy ngày hiện tại theo giờ Việt Nam
@@ -3176,8 +3158,9 @@ router.get('/api/baocao/luong-gv/', loginRequired, async (req, res) => {
             // Deduplicate theo người trực thực tế + ca của giáo viên gốc + ngày + loại trực
             // (Đảm bảo: nếu 1 ca phụ trách cụm phòng nhỏ P6-P7-P8 thì chỉ tính 1 ca,
             //  nhưng nếu một GV vừa trực ca của mình vừa trực thay cho GV khác thì ca trực thay VẪN ĐƯỢC TÍNH TIỀN ĐẦY ĐỦ)
-            const shiftKey = `${actualId}_${pc.ma_gv_id}_${pc.ngay}_${pc.loai_truc}`;
-            if (seenShift.has(shiftKey)) return; // Tránh tính trùng nếu 1 người trực cụm nhiều phòng trong 1 ca
+            // GV có thể trực nhiều phòng cùng lúc trong 1 ca (loại trực) nhưng chỉ tính 1 công/tiền
+            const shiftKey = `${actualId}_${pc.ngay}_${pc.loai_truc}`;
+            if (seenShift.has(shiftKey)) return; // Tránh tính trùng nếu 1 người trực nhiều phòng trong cùng 1 ca
             seenShift.add(shiftKey);
 
             if (pc.loai_truc === 0) {
@@ -3256,7 +3239,7 @@ router.get('/api/baocao/full/', loginRequired, async (req, res) => {
         const results = [];
         for (const { year, month } of months) {
             const start = `${year}-${String(month).padStart(2, '0')}-01`;
-            const end = new Date(year, month, 0).toISOString().split('T')[0];
+            const end = getLastDayYMD(year, month);
             const [tongHS, diemDanh] = await Promise.all([
                 HocSinh.count({ where: { dang_hoc: true } }),
                 DiemDanhHS.count({ where: { ngay: { [Op.between]: [start, end] }, diem_danh_an: 0 } }),

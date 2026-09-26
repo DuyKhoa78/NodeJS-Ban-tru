@@ -767,8 +767,11 @@ router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), as
     // Đếm ca trực tháng hiện tại tính đến thời điểm hiện tại
     const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
     const now = new Date();
-    const startMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const endMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+    const startMonth = `${curYear}-${String(curMonth).padStart(2, '0')}-01`;
+    const lastDayOfMonth = new Date(curYear, curMonth, 0).getDate();
+    const endMonth = `${curYear}-${String(curMonth).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
     const effectiveEndMonth = endMonth > todayVN ? todayVN : endMonth;
 
     let caThang = [];
