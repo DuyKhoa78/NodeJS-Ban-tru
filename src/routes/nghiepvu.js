@@ -2620,7 +2620,7 @@ router.get('/api/baocao/export-an/', loginRequired, async (req, res) => {
             so_nam: year,
             ngay_ban_tru: ngayBanTru,
             tong_buoi_bantru: ngayBanTru.length,
-            phong_list: phongList.filter(p => p.dang_dung || (dataByPhong[p.ma_phong] && dataByPhong[p.ma_phong].length > 0)).map(p => p.ma_phong),
+            phong_list: phongList.filter(p => dataByPhong[p.ma_phong] && dataByPhong[p.ma_phong].length > 0).map(p => p.ma_phong),
             data: dataByPhong,
             ngay_dac_biet_map: ngayDacBietMapAn,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
             nam_hoc: cauhinh.nam_hoc,
@@ -2751,7 +2751,7 @@ router.get('/api/baocao/export-ngu/', loginRequired, async (req, res) => {
             so_thang: month, so_nam: year,
             ngay_ban_tru: ngayBanTru,
             tong_buoi_bantru: ngayBanTru.length,
-            phong_list: phongList.filter(p => p.dang_dung || (dataByPhong[p.ma_phong] && dataByPhong[p.ma_phong].length > 0)).map(p => p.ma_phong),
+            phong_list: phongList.filter(p => dataByPhong[p.ma_phong] && dataByPhong[p.ma_phong].length > 0).map(p => p.ma_phong),
             data: dataByPhong,
             ngay_dac_biet_map: ngayDacBietMapNgu,   // { 'YYYY-MM-DD': { lop_ap_dung, hs_loai_tru } }
             nam_hoc: cauhinh.nam_hoc,
