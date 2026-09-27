@@ -168,6 +168,16 @@ const migrations = [
         console.warn('Migration 20260925_room_history_and_diemdanh_snapshot (backfill lichsu) warning:', err.message);
       });
     }
+  },
+  {
+    id: '20260927_add_link_google_form_to_cauhinhhethong',
+    async up(sequelize) {
+      await sequelize.query(`
+        ALTER TABLE "core_cauhinhhethong" ADD COLUMN IF NOT EXISTS "link_google_form" VARCHAR(500);
+      `).catch(err => {
+        console.warn('Migration 20260927_add_link_google_form_to_cauhinhhethong warning:', err.message);
+      });
+    }
   }
 ];
 

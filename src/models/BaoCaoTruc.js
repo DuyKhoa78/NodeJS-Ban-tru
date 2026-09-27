@@ -45,7 +45,12 @@ const BaoCaoTruc = sequelize.define('BaoCaoTruc', {
   so_hs_vang: {
     type: DataTypes.INTEGER,
     defaultValue: 0,
-    comment: 'Số lượng HS vắng',
+    comment: 'Số lượng HS vắng không phép',
+  },
+  so_hs_phep: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    comment: 'Số lượng HS vắng có phép',
   },
   danh_sach_vang: {
     type: DataTypes.TEXT,
