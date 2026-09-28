@@ -1453,18 +1453,29 @@ router.delete('/api/cauhinh/dot-thanh-toan/:id', loginRequired, roleRequired('ad
   }
 });
 
+// In-memory cache cho system-status để tránh dội query lên Postgres liên tục mỗi 15s
+let systemStatusCache = null;
+let systemStatusCacheTime = 0;
+
 /** GET /api/public/system-status/ - Kiểm tra trạng thái hệ thống (Public - Không cần đăng nhập) */
 router.get('/api/public/system-status/', async (req, res) => {
+  const now = Date.now();
+  if (systemStatusCache && (now - systemStatusCacheTime < 10000)) {
+    return res.json(systemStatusCache);
+  }
   try {
     const heThong = await CauHinhHeThong.findByPk(1);
-    return res.json({
+    const data = {
       ok: true,
       bao_tri: Boolean(heThong?.bao_tri),
       thong_bao: heThong?.thong_bao_bao_tri || 'Hệ thống Quản lý Bán trú đang được bảo trì và nâng cấp định kỳ.',
       thoi_gian: heThong?.thoi_gian_bao_tri || 'Dự kiến hoàn tất trong 15-30 phút',
       ten_truong: heThong?.ten_truong || 'LÊ THỊ HỒNG GẤM',
       nam_hoc: heThong?.nam_hoc || '2026-2027',
-    });
+    };
+    systemStatusCache = data;
+    systemStatusCacheTime = now;
+    return res.json(data);
   } catch (err) {
     return res.json({
       ok: true,
@@ -1478,6 +1489,7 @@ router.get('/api/public/system-status/', async (req, res) => {
 /** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri } */
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
+    systemStatusCache = null; // Xóa cache ngay khi cấu hình thay đổi
     const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri, tien_an } = req.body;
     const updateData = {
       id: 1,

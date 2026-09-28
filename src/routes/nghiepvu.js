@@ -300,6 +300,8 @@ function getVietnamTime(dateObj = new Date()) {
     return { h, m, totalMins: h * 60 + m, timeStr, todayStr: dateStr };
 }
 
+const lastRescueChecks = new Map();
+
 async function checkAndAutoRescueRooms(targetNgay) {
     try {
         const vn = getVietnamTime();
@@ -310,6 +312,13 @@ async function checkAndAutoRescueRooms(targetNgay) {
             // Ngày trong tương lai -> không tự động chốt
             return;
         }
+
+        // Throttle: Không chạy lại nếu vừa chạy kiểm tra trong vòng 30 giây qua cho cùng ngày
+        const lastRun = lastRescueChecks.get(targetNgay) || 0;
+        if (Date.now() - lastRun < 30000) {
+            return;
+        }
+        lastRescueChecks.set(targetNgay, Date.now());
 
         // Xác định ca nào đã quá giờ:
         // Ca Ăn kết thúc lúc 11h30 (690 phút)
@@ -330,60 +339,77 @@ async function checkAndAutoRescueRooms(targetNgay) {
             const fieldPhuongThuc = loaiTrucNum === 0 ? 'phuong_thuc_an' : 'phuong_thuc_ngu';
             const fieldThoiGian = loaiTrucNum === 0 ? 'thoi_gian_diem_danh_an' : 'thoi_gian_diem_danh_ngu';
 
-            // Tìm các phân công trực của ca này
+            // Tìm các phân công trực của ca này (1 query)
             const phanCongs = await PhanCongTrucGV.findAll({
                 where: { ngay: targetNgay, loai_truc: loaiTrucNum },
                 attributes: ['ma_phong_id']
             });
             const assignedRooms = [...new Set(phanCongs.map(p => p.ma_phong_id))];
+            if (assignedRooms.length === 0) continue;
 
-            for (const ma_phong of assignedRooms) {
-                // Kiểm tra xem phòng này đã chốt chưa
-                const existingChot = await DiemDanhPhong.findOne({
-                    where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: ma_phong }
-                });
+            // Kiểm tra trạng thái chốt của toàn bộ các phòng trong 1 query
+            const existingChots = await DiemDanhPhong.findAll({
+                where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: { [Op.in]: assignedRooms } }
+            });
+            const completedRooms = new Set(
+                existingChots.filter(ec => ec.trang_thai_chot === 'da_chot' || ec.da_diem_danh).map(ec => ec.ma_phong_id)
+            );
+            const uncompletedRooms = assignedRooms.filter(r => !completedRooms.has(r));
+            if (uncompletedRooms.length === 0) continue;
 
-                if (existingChot && (existingChot.trang_thai_chot === 'da_chot' || existingChot.da_diem_danh)) {
-                    continue; // Phòng đã hoàn tất chốt sổ
+            // Lấy toàn bộ draft của các phòng chưa hoàn tất (1 query)
+            const drafts = await DiemDanhDraft.findAll({
+                where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: { [Op.in]: uncompletedRooms } }
+            });
+            const draftMap = {};
+            drafts.forEach(dr => {
+                if (dr && Array.isArray(dr.danh_sach_hs)) {
+                    draftMap[dr.ma_phong_id] = dr.danh_sach_hs;
                 }
+            });
 
-                // Kiểm tra xem phòng có dữ liệu nháp draft không
-                const draft = await DiemDanhDraft.findOne({
-                    where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: ma_phong }
-                });
+            // Lấy toàn bộ học sinh của các phòng chưa hoàn tất (1 query)
+            const allHsList = await HocSinh.findAll({
+                where: {
+                    [fieldPhong]: { [Op.in]: uncompletedRooms },
+                    [Op.or]: [
+                        { dang_hoc: true },
+                        { ngay_rut: { [Op.gte]: targetNgay } }
+                    ]
+                }
+            });
+            if (allHsList.length === 0) continue;
 
-                // Lấy tất cả HS của phòng
-                const hsList = await HocSinh.findAll({
-                    where: {
-                        [fieldPhong]: ma_phong,
-                        [Op.or]: [
-                            { dang_hoc: true },
-                            { ngay_rut: { [Op.gte]: targetNgay } }
-                        ]
-                    }
-                });
+            // Lấy toàn bộ điểm danh đã có (1 query)
+            const existingDD = await DiemDanhHS.findAll({
+                where: {
+                    ngay: targetNgay,
+                    ma_hs_id: { [Op.in]: allHsList.map(h => h.id) }
+                }
+            });
+            const existingMap = {};
+            existingDD.forEach(d => { existingMap[d.ma_hs_id] = d; });
 
-                if (hsList.length === 0) continue;
+            // Nhóm học sinh theo phòng để xử lý theo batch
+            const hsByRoom = {};
+            allHsList.forEach(hs => {
+                const room = hs[fieldPhong];
+                if (!hsByRoom[room]) hsByRoom[room] = [];
+                hsByRoom[room].push(hs);
+            });
 
-                // Lấy các điểm danh đã có trong DB
-                const existingDD = await DiemDanhHS.findAll({
-                    where: {
-                        ngay: targetNgay,
-                        ma_hs_id: { [Op.in]: hsList.map(h => h.id) }
-                    }
-                });
-                const existingMap = {};
-                existingDD.forEach(d => { existingMap[d.ma_hs_id] = d; });
+            const allRecordsToSave = [];
+            const phongUpserts = [];
 
+            for (const ma_phong of uncompletedRooms) {
+                const roomHs = hsByRoom[ma_phong] || [];
+                if (roomHs.length === 0) continue;
+
+                const draftItems = draftMap[ma_phong] || [];
                 const draftItemsMap = {};
-                if (draft && Array.isArray(draft.danh_sach_hs)) {
-                    draft.danh_sach_hs.forEach(item => {
-                        draftItemsMap[item.id] = item;
-                    });
-                }
+                draftItems.forEach(item => { draftItemsMap[item.id] = item; });
 
-                const recordsToSave = [];
-                for (const hs of hsList) {
+                for (const hs of roomHs) {
                     const ex = existingMap[hs.id];
                     const dr = draftItemsMap[hs.id];
 
@@ -406,7 +432,7 @@ async function checkAndAutoRescueRooms(targetNgay) {
                         thoiGian = ex[fieldThoiGian] || new Date();
                     }
 
-                    recordsToSave.push({
+                    allRecordsToSave.push({
                         ma_hs_id: hs.id,
                         ngay: targetNgay,
                         [fieldPhong]: ma_phong,
@@ -417,30 +443,34 @@ async function checkAndAutoRescueRooms(targetNgay) {
                     });
                 }
 
+                phongUpserts.push({
+                    ma_phong_id: ma_phong,
+                    ngay: targetNgay,
+                    loai_truc: loaiTrucNum,
+                    da_diem_danh: true,
+                    thoi_gian: new Date(),
+                    trang_thai_chot: 'da_chot',
+                    ma_gv_chot_id: null, // Hệ thống tự động thu thập
+                    ghi_chu_chot: 'Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực'
+                });
+            }
+
+            if (allRecordsToSave.length > 0 || phongUpserts.length > 0) {
                 const t = await sequelize.transaction();
                 try {
-                    if (recordsToSave.length > 0) {
-                        await DiemDanhHS.bulkCreate(recordsToSave, {
+                    if (allRecordsToSave.length > 0) {
+                        await DiemDanhHS.bulkCreate(allRecordsToSave, {
                             updateOnDuplicate: [fieldStatus, fieldPhuongThuc, fieldThoiGian, 'ghi_chu', fieldPhong],
                             transaction: t
                         });
                     }
-
-                    await DiemDanhPhong.upsert({
-                        ma_phong_id: ma_phong,
-                        ngay: targetNgay,
-                        loai_truc: loaiTrucNum,
-                        da_diem_danh: true,
-                        thoi_gian: new Date(),
-                        trang_thai_chot: 'da_chot',
-                        ma_gv_chot_id: null, // Hệ thống tự động thu thập
-                        ghi_chu_chot: 'Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực'
-                    }, { transaction: t });
-
+                    for (const pu of phongUpserts) {
+                        await DiemDanhPhong.upsert(pu, { transaction: t });
+                    }
                     await t.commit();
                 } catch (saveErr) {
                     await t.rollback();
-                    console.error(`Lỗi khi tự động thu thập phòng ${ma_phong}:`, saveErr.message);
+                    console.error('Lỗi khi tự động thu thập phòng theo lô:', saveErr.message);
                 }
             }
         }
@@ -464,7 +494,7 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
 
         const records = await DiemDanhHS.findAll({
             where: { ngay: ngayFilter },
-            include: [{ association: 'hoc_sinh', attributes: ['id', 'ho_ten', 'lop', 'ma_phong_an_id', 'ma_phong_ngu_id'] }],
+            attributes: ['id', 'ma_hs_id', 'diem_danh_an', 'diem_danh_ngu', 'ghi_chu', 'ma_phong_an_id', 'ma_phong_ngu_id'],
         });
 
         // Lấy trạng thái chốt của các phòng trong ca này
@@ -491,9 +521,14 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
             } else if (item.ma_gv_chot_id === null && (item.trang_thai_chot === 'da_chot' || item.da_diem_danh)) {
                 tenNguoiChot = 'Hệ thống';
             }
+            const isCompleted = item.trang_thai_chot === 'da_chot' || Boolean(item.da_diem_danh);
+            const isAutoChot = Boolean(isCompleted && (item.ma_gv_chot_id === null || tenNguoiChot === 'Hệ thống' || item.ghi_chu_chot?.includes('Hệ thống')));
+            const isGvChot = Boolean(isCompleted && !isAutoChot);
             return {
                 ...item,
-                ten_nguoi_chot: tenNguoiChot
+                ten_nguoi_chot: tenNguoiChot,
+                is_auto_chot: isAutoChot,
+                is_gv_chot: isGvChot
             };
         });
 
@@ -546,6 +581,31 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
             hasSchedule = false;
         }
 
+        const baoCaoRecords = await BaoCaoTruc.findAll({
+            where: {
+                ngay: ngayFilter,
+                ca_truc: loaiTrucQuery
+            },
+            attributes: ['id', 'ma_phong', 'ho_ten_gv', 'si_so', 'created_at']
+        });
+
+        const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
+        const curMinutes = vnNow.getUTCHours() * 60 + vnNow.getUTCMinutes();
+        const todayVn = vnNow.toISOString().split('T')[0];
+        const isCaAn = loaiTrucQuery === 0;
+        const minMinutes = isCaAn ? 675 : 700; // 11:15 hoặc 11:40
+        const maxMinutes = isCaAn ? 705 : 765; // 11:45 hoặc 12:45
+        let timeState = 'trong_gio';
+        if (ngayFilter === todayVn) {
+            if (curMinutes < minMinutes) timeState = 'chua_den';
+            else if (curMinutes >= maxMinutes) timeState = 'qua_gio';
+            else timeState = 'trong_gio';
+        } else if (ngayFilter < todayVn) {
+            timeState = 'qua_gio';
+        } else {
+            timeState = 'chua_den';
+        }
+
         return res.json({
             ok: true,
             records,
@@ -555,6 +615,13 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
             phong_statuses: phongStatuses,
             assigned_rooms: assignedRooms,
             my_assignments: myAssignments,
+            bao_cao_records: baoCaoRecords,
+            khung_gio_bao_cao: {
+                state: timeState,
+                is_het_gio: timeState === 'qua_gio',
+                gio_mo: isCaAn ? '11:15' : '11:40',
+                gio_dong: isCaAn ? '11:45' : '12:45'
+            }
         });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
@@ -980,52 +1047,81 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
         // Lấy danh sách phân công của giáo viên (chạy thật theo ngày thực tế)
         let isTestDate = false;
 
-        // Với mỗi phân công, lấy trạng thái DiemDanhPhong, DiemDanhDraft, và tổng số HS phòng
+        const anRooms = assignments.filter(a => a.loai_truc === 0).map(a => a.ma_phong_id);
+        const nguRooms = assignments.filter(a => a.loai_truc === 1).map(a => a.ma_phong_id);
+        const allAssignedRoomCodes = [...new Set([...anRooms, ...nguRooms])];
+
+        // 1 query cho tất cả học sinh thuộc các phòng phân công
+        const allStudents = allAssignedRoomCodes.length > 0 ? await HocSinh.findAll({
+            where: {
+                [Op.or]: [
+                    { ma_phong_an_id: { [Op.in]: anRooms } },
+                    { ma_phong_ngu_id: { [Op.in]: nguRooms } }
+                ],
+                dang_hoc: true
+            },
+            attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ma_phong_an_id', 'ma_phong_ngu_id']
+        }) : [];
+
+        // 1 query cho toàn bộ trạng thái chốt của các phòng
+        const allStatuses = allAssignedRoomCodes.length > 0 ? await DiemDanhPhong.findAll({
+            where: {
+                ngay: targetNgay,
+                ma_phong_id: { [Op.in]: allAssignedRoomCodes }
+            }
+        }) : [];
+        const statusMap = {};
+        allStatuses.forEach(ps => { statusMap[`${ps.loai_truc}_${ps.ma_phong_id}`] = ps; });
+
+        // 1 query cho toàn bộ draft của các phòng
+        const allDrafts = allAssignedRoomCodes.length > 0 ? await DiemDanhDraft.findAll({
+            where: {
+                ngay: targetNgay,
+                ma_phong_id: { [Op.in]: allAssignedRoomCodes }
+            }
+        }) : [];
+        const draftMap = {};
+        allDrafts.forEach(d => { draftMap[`${d.loai_truc}_${d.ma_phong_id}`] = d; });
+
+        // 1 query cho toàn bộ điểm danh của các học sinh
+        const allHsIds = allStudents.map(s => s.id);
+        const allDD = allHsIds.length > 0 ? await DiemDanhHS.findAll({
+            where: {
+                ngay: targetNgay,
+                ma_hs_id: { [Op.in]: allHsIds }
+            },
+            attributes: ['ma_hs_id', 'diem_danh_an', 'diem_danh_ngu', 'ghi_chu']
+        }) : [];
+        const ddMapAn = {};
+        const ddMapNgu = {};
+        allDD.forEach(r => {
+            if (r.diem_danh_an !== null && r.diem_danh_an !== undefined) {
+                ddMapAn[r.ma_hs_id] = { status: r.diem_danh_an, ghi_chu: r.ghi_chu };
+            }
+            if (r.diem_danh_ngu !== null && r.diem_danh_ngu !== undefined) {
+                ddMapNgu[r.ma_hs_id] = { status: r.diem_danh_ngu, ghi_chu: r.ghi_chu };
+            }
+        });
+
+        // Với mỗi phân công, tổng hợp dữ liệu in-memory siêu tốc
         const result = [];
         for (const pc of assignments) {
             const loaiTruc = pc.loai_truc; // 0=An, 1=Ngu
             const maPhong = pc.ma_phong_id;
 
-            // Đếm học sinh trong phòng và lấy dữ liệu điểm danh
-            const fieldPhong = loaiTruc === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
-            const studentsInRoom = await HocSinh.findAll({
-                where: { [fieldPhong]: maPhong, dang_hoc: true },
-                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh']
-            });
+            const studentsInRoom = allStudents.filter(s => (loaiTruc === 0 ? s.ma_phong_an_id : s.ma_phong_ngu_id) === maPhong);
             const totalStudents = studentsInRoom.length;
-            const hsIds = studentsInRoom.map(s => s.id);
 
             // Trạng thái chốt
-            const phongStatus = await DiemDanhPhong.findOne({
-                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: maPhong }
-            });
+            const phongStatus = statusMap[`${loaiTruc}_${maPhong}`];
 
             // Bản nháp đang lưu
-            const draft = await DiemDanhDraft.findOne({
-                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: maPhong }
-            });
-
+            const draft = draftMap[`${loaiTruc}_${maPhong}`];
             const draftCount = (draft && Array.isArray(draft.danh_sach_hs))
                 ? draft.danh_sach_hs.filter(d => d.status === 0).length
                 : 0;
 
-            // Thống kê sĩ số, số đã điểm danh và HS vắng
-            const fieldStatus = loaiTruc === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
-            const ddRecords = hsIds.length > 0 ? await DiemDanhHS.findAll({
-                where: {
-                    ngay: targetNgay,
-                    ma_hs_id: { [Op.in]: hsIds }
-                }
-            }) : [];
-
-            const ddMap = {};
-            ddRecords.forEach(r => {
-                const status = r[fieldStatus];
-                if (status !== null && status !== undefined) {
-                    ddMap[r.ma_hs_id] = { status, ghi_chu: r.ghi_chu };
-                }
-            });
-
+            const ddMap = { ...(loaiTruc === 0 ? ddMapAn : ddMapNgu) };
             if (draft && Array.isArray(draft.danh_sach_hs)) {
                 draft.danh_sach_hs.forEach(item => {
                     if (!ddMap[item.id] || ddMap[item.id].status === null) {
@@ -1171,6 +1267,9 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
                 trang_thai_chot: phongStatus?.trang_thai_chot || 'chua_chot',
                 da_diem_danh: Boolean(phongStatus?.da_diem_danh),
                 is_chot: isChot,
+                is_auto_chot: Boolean(isChot && (phongStatus?.ma_gv_chot_id === null || phongStatus?.ghi_chu_chot?.includes('Hệ thống'))),
+                is_gv_chot: Boolean(isChot && phongStatus?.ma_gv_chot_id !== null && !phongStatus?.ghi_chu_chot?.includes('Hệ thống')),
+                ma_gv_chot_id: phongStatus?.ma_gv_chot_id || null,
                 thoi_gian_chot: phongStatus?.thoi_gian || null,
                 ghi_chu_chot: phongStatus?.ghi_chu_chot || null,
                 khung_gio: {
@@ -1636,47 +1735,66 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
         const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
         const fieldStatus = loaiTrucNum === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
 
+        const allRoomCodes = Object.keys(roomMap);
+
+        // 1. Lấy toàn bộ số HS của các phòng trong 1 query duy nhất
+        const allStudents = await HocSinh.findAll({
+            where: { [fieldPhong]: { [Op.in]: allRoomCodes }, dang_hoc: true },
+            attributes: ['id', fieldPhong]
+        });
+        const totalHsMap = {};
+        const hsIdToRoomMap = {};
+        allStudents.forEach(hs => {
+            const r = hs[fieldPhong];
+            totalHsMap[r] = (totalHsMap[r] || 0) + 1;
+            hsIdToRoomMap[hs.id] = r;
+        });
+
+        // 2. Lấy toàn bộ kết quả điểm danh của ngày trong 1 query duy nhất
+        const allDDRecords = await DiemDanhHS.findAll({
+            where: { ngay: targetNgay },
+            attributes: ['ma_hs_id', fieldStatus, fieldPhong]
+        });
+        const roomStatsMap = {};
+        allDDRecords.forEach(r => {
+            const room = r[fieldPhong] || hsIdToRoomMap[r.ma_hs_id];
+            if (!room) return;
+            if (!roomStatsMap[room]) roomStatsMap[room] = { comat: 0, vang: 0, phep: 0 };
+            const st = r[fieldStatus];
+            if (st === 0) roomStatsMap[room].comat++;
+            else if (st === 1) roomStatsMap[room].vang++;
+            else if (st === 2) roomStatsMap[room].phep++;
+        });
+
+        // 3. Lấy tên giáo viên chốt trong 1 query duy nhất
+        const gvUserIds = [...new Set(phongStatuses.map(ps => ps.ma_gv_chot_id).filter(Boolean))];
+        const staffUsers = gvUserIds.length > 0 ? await StaffUser.findAll({
+            where: { id: { [Op.in]: gvUserIds } },
+            attributes: ['id', 'fullname', 'username']
+        }) : [];
+        const gvNameMap = {};
+        staffUsers.forEach(u => { gvNameMap[u.id] = u.fullname || u.username; });
+
         const result = [];
-        for (const ma_phong of Object.keys(roomMap)) {
+        for (const ma_phong of allRoomCodes) {
             const item = roomMap[ma_phong];
             const ps = statusMap[ma_phong];
             const dr = draftMap[ma_phong];
 
-            const totalHs = await HocSinh.count({
-                where: { [fieldPhong]: ma_phong, dang_hoc: true }
-            });
-
-            // Lấy kết quả thực tế trên DiemDanhHS nếu đã có
-            const ddRecords = await DiemDanhHS.findAll({
-                include: [{
-                    association: 'hoc_sinh',
-                    where: { [fieldPhong]: ma_phong, dang_hoc: true },
-                    attributes: ['id']
-                }],
-                where: { ngay: targetNgay }
-            });
-
-            let comat = 0;
-            let vang = 0;
-            let phep = 0;
-            ddRecords.forEach(r => {
-                const st = r[fieldStatus];
-                if (st === 0) comat++;
-                else if (st === 1) vang++;
-                else if (st === 2) phep++;
-            });
+            const totalHs = totalHsMap[ma_phong] || 0;
+            const stats = roomStatsMap[ma_phong] || { comat: 0, vang: 0, phep: 0 };
+            const comat = stats.comat;
+            const vang = stats.vang;
+            const phep = stats.phep;
 
             const draftCount = (dr && Array.isArray(dr.danh_sach_hs))
                 ? dr.danh_sach_hs.filter(x => x.status === 0).length
                 : 0;
 
             const isCompleted = ps?.trang_thai_chot === 'da_chot' || Boolean(ps?.da_diem_danh);
-
-            let tenGvChot = null;
-            if (ps?.ma_gv_chot_id) {
-                const u = await StaffUser.findByPk(ps.ma_gv_chot_id, { attributes: ['fullname', 'username'] });
-                tenGvChot = u?.username || u?.fullname || null;
-            }
+            const tenGvChot = ps?.ma_gv_chot_id ? (gvNameMap[ps.ma_gv_chot_id] || null) : null;
+            const isAutoChot = Boolean(isCompleted && (ps?.ma_gv_chot_id === null || !tenGvChot || ps?.ghi_chu_chot?.includes('Hệ thống')));
+            const isGvChot = Boolean(isCompleted && !isAutoChot);
 
             result.push({
                 ma_phong,
@@ -1684,6 +1802,8 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
                 giao_vien: item.giao_vien,
                 total_hs: totalHs,
                 is_completed: isCompleted,
+                is_auto_chot: isAutoChot,
+                is_gv_chot: isGvChot,
                 trang_thai_chot: isCompleted ? 'da_chot' : 'chua_chot',
                 thoi_gian_chot: ps?.thoi_gian || null,
                 ghi_chu_chot: ps?.ghi_chu_chot || null,
@@ -3649,6 +3769,31 @@ function normalizeCaTruc(input) {
 }
 
 /**
+ * Chuẩn hóa Sĩ số: loại bỏ tiền tố tên phòng (ví dụ "D31 35/35" -> "35/35", "D.33 28/35" -> "28/35")
+ */
+function cleanSiSoHelper(raw, maPhong) {
+    if (!raw) return '';
+    let str = String(raw).trim();
+    const fractionMatch = str.match(/\b\d+\s*\/\s*\d+\b/);
+    if (fractionMatch) {
+        return fractionMatch[0].replace(/\s+/g, '');
+    }
+    str = str.replace(/^(phòng|phong|p\.?)\s*[a-z0-9\.]+\s*[:\-\s]*/i, '');
+    str = str.replace(/^[a-z]+[\.\-_]?[0-9]+\s*[:\-\s]*/i, '');
+    if (maPhong) {
+        const rooms = String(maPhong).split(/[,;\-\/]+/).map(r => r.trim()).filter(Boolean);
+        for (const r of rooms) {
+            if (/[a-zA-Z]/.test(r)) {
+                const escaped = r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const reg = new RegExp('(^|\\s)' + escaped + '[:\\s\\-]*', 'gi');
+                str = str.replace(reg, '$1').trim();
+            }
+        }
+    }
+    return str.trim();
+}
+
+/**
  * POST /api/webhook/google-form-baocao
  * Nhận báo cáo tình hình trực của GV qua Google Apps Script Webhook
  * Hỗ trợ cả 3 nhánh Trực ăn, Trực ngủ và Giám sát (16 cột chuẩn) từ Google Form / Google Sheets
@@ -3978,6 +4123,10 @@ router.post('/api/webhook/google-form-baocao', async (req, res) => {
             } catch (errCount) {
                 console.warn('Lỗi tự động tính sĩ số phòng webhook:', errCount.message);
             }
+        }
+
+        if (si_so_raw) {
+            si_so_raw = cleanSiSoHelper(si_so_raw, ma_phong_raw);
         }
 
         // 7. Trích xuất Ghi nhận HS vi phạm (hỗ trợ cả nề nếp và nền nếp, có (Nếu có))
@@ -4482,37 +4631,66 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             : [];
 
         // 1. Kiểm tra xem giáo viên này (hoặc phòng này) đã có báo cáo trong ngày chưa
-        const whereReport = {
-            ngay: targetNgay,
-            ca_truc: loaiTruc,
-        };
+        let existingReport = null;
         if (rawPhong) {
-            whereReport.ma_phong = rawPhong.toUpperCase();
-        }
-
-        let existingReport = await BaoCaoTruc.findOne({
-            where: {
-                ...whereReport,
-                ho_ten_gv: hoTenGV,
-            },
-            order: [['id', 'DESC']]
-        });
-
-        if (!existingReport && rawPhong) {
-            const orConditions = [{ ma_phong: rawPhong.toUpperCase() }];
-            if (roomCodes.length > 0) {
-                roomCodes.forEach(rc => {
-                    orConditions.push({ ma_phong: { [Op.like]: `%${rc}%` } });
+            if (roomCodes.length <= 1) {
+                const targetCode = (roomCodes[0] || rawPhong).toUpperCase();
+                existingReport = await BaoCaoTruc.findOne({
+                    where: {
+                        ngay: targetNgay,
+                        ca_truc: loaiTruc,
+                        [Op.or]: [
+                            { ma_phong: rawPhong.toUpperCase() },
+                            { ma_phong: { [Op.like]: `%${targetCode}%` } }
+                        ]
+                    },
+                    order: [['id', 'DESC']]
                 });
+            } else {
+                // Với chế độ gộp nhiều phòng (ví dụ P6, P7, P8):
+                // 1. Tìm báo cáo gộp chung chứa tất cả các phòng
+                existingReport = await BaoCaoTruc.findOne({
+                    where: {
+                        ngay: targetNgay,
+                        ca_truc: loaiTruc,
+                        [Op.or]: [
+                            { ma_phong: rawPhong.toUpperCase() },
+                            { [Op.and]: roomCodes.map(rc => ({ ma_phong: { [Op.like]: `%${rc}%` } })) }
+                        ]
+                    },
+                    order: [['id', 'DESC']]
+                });
+
+                // 2. Nếu chưa có 1 báo cáo chung, kiểm tra xem tất cả các phòng phụ trách này đều đã có báo cáo riêng lẻ chưa
+                if (!existingReport && roomCodes.length > 1) {
+                    const reportsForRooms = await BaoCaoTruc.findAll({
+                        where: {
+                            ngay: targetNgay,
+                            ca_truc: loaiTruc,
+                            [Op.or]: roomCodes.map(rc => ({
+                                [Op.or]: [
+                                    { ma_phong: rc },
+                                    { ma_phong: { [Op.like]: `%${rc}%` } }
+                                ]
+                            }))
+                        },
+                        order: [['id', 'DESC']]
+                    });
+                    const reportedRooms = new Set();
+                    reportsForRooms.forEach(r => {
+                        const parts = String(r.ma_phong || '').split(',').map(s => s.trim().toUpperCase());
+                        roomCodes.forEach(rc => {
+                            if (parts.includes(rc) || String(r.ma_phong || '').toUpperCase().includes(rc)) {
+                                reportedRooms.add(rc);
+                            }
+                        });
+                    });
+                    const allReported = roomCodes.length > 0 && roomCodes.every(rc => reportedRooms.has(rc));
+                    if (allReported && reportsForRooms.length > 0) {
+                        existingReport = reportsForRooms[0];
+                    }
+                }
             }
-            existingReport = await BaoCaoTruc.findOne({
-                where: {
-                    ngay: targetNgay,
-                    ca_truc: loaiTruc,
-                    [Op.or]: orConditions
-                },
-                order: [['id', 'DESC']]
-            });
         }
 
         // 2. Tự động tính toán sĩ số và danh sách HS vắng từ CSDL
@@ -4527,13 +4705,23 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         if (roomCodes.length > 0 && (loaiTruc === 0 || loaiTruc === 1)) {
             const fieldPhong = loaiTruc === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
 
-            const students = await HocSinh.findAll({
+            const allStudents = await HocSinh.findAll({
                 where: {
                     [fieldPhong]: { [Op.in]: roomCodes },
-                    dang_hoc: true
+                    [Op.or]: [
+                        { dang_hoc: true },
+                        { ngay_rut: { [Op.gte]: targetNgay } }
+                    ]
                 },
-                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', fieldPhong],
+                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ngay_vao', 'ngay_rut', fieldPhong],
                 order: [['lop', 'ASC'], ['ho_ten', 'ASC']]
+            });
+
+            // Lọc chính xác học sinh tham gia tại ngày targetNgay
+            const students = allStudents.filter(s => {
+                if (s.ngay_vao && s.ngay_vao > targetNgay) return false;
+                if (s.ngay_rut && s.ngay_rut < targetNgay) return false;
+                return true;
             });
 
             totalStudents = students.length;
@@ -4554,10 +4742,11 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                 }
             });
 
-            for (const rCode of roomCodes) {
-                const draft = await DiemDanhDraft.findOne({
-                    where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rCode }
-                });
+            // Lấy toàn bộ draft của các phòng trong 1 query duy nhất
+            const drafts = await DiemDanhDraft.findAll({
+                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: { [Op.in]: roomCodes } }
+            });
+            drafts.forEach(draft => {
                 if (draft && Array.isArray(draft.danh_sach_hs)) {
                     draft.danh_sach_hs.forEach(item => {
                         if (!ddMap[item.id] || ddMap[item.id].status === null) {
@@ -4565,7 +4754,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                         }
                     });
                 }
-            }
+            });
 
             const vangList = [];
             let countCoMat = 0;
@@ -4589,9 +4778,17 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                 }
             });
 
+            // Kiểm tra trạng thái chốt của các phòng
+            const pStatuses = await DiemDanhPhong.findAll({
+                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: { [Op.in]: roomCodes } }
+            });
+            const isAllChot = pStatuses.length > 0 && pStatuses.every(ps => ps.trang_thai_chot === 'da_chot' || Boolean(ps.da_diem_danh));
+
             soVangCalculated = vangList.length; // Chỉ tính số lượng HS vắng không phép
             countChecked = countCoMat + countPhep + soVangCalculated;
-            const soCoMatThucTe = Math.max(0, totalStudents - vangList.length - countPhep);
+            const soCoMatThucTe = isAllChot
+                ? Math.max(0, totalStudents - vangList.length - countPhep)
+                : countCoMat;
             siSoCalculated = totalStudents > 0 ? `${soCoMatThucTe}/${totalStudents}` : '0/0';
 
             if (vangList.length > 0) {
@@ -4714,7 +4911,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             ca_truc: loaiTruc,
             ma_phong: rawPhong,
             is_giam_sat: isGiamSat,
-            si_so: existingReport?.si_so || siSoCalculated,
+            si_so: cleanSiSoHelper(existingReport?.si_so || siSoCalculated, rawPhong),
             so_hs_phep: finalPhep,
             so_hs_vang: existingReport?.so_hs_vang !== undefined ? existingReport.so_hs_vang : soVangCalculated,
             danh_sach_vang: existingReport?.danh_sach_vang || dsVangCalculated,
@@ -4724,6 +4921,12 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             da_diem_danh: daDiemDanh,
             so_hs_da_diem_danh: countChecked,
             tong_hs: typeof totalStudents !== 'undefined' ? totalStudents : 0,
+            live_diem_danh: {
+                si_so: siSoCalculated,
+                so_hs_vang: soVangCalculated,
+                so_hs_phep: countPhep,
+                danh_sach_vang: dsVangCalculated
+            },
             khung_gio_quy_dinh: {
                 gio_mo: gioMoCua,
                 gio_dong: gioDongCua,
@@ -4741,7 +4944,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                 hs_vi_pham: existingReport.hs_vi_pham,
                 ghi_chu: existingReport.ghi_chu,
                 vsat_thuc_pham: existingReport.vsat_thuc_pham,
-                si_so: existingReport.si_so,
+                si_so: cleanSiSoHelper(existingReport.si_so, rawPhong),
                 so_hs_phep: existingReport.so_hs_phep || 0,
                 so_hs_vang: existingReport.so_hs_vang,
                 danh_sach_vang: existingReport.danh_sach_vang,
@@ -4867,7 +5070,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
 
         if (record) {
             record.ho_ten_gv = hoTenGV;
-            if (si_so !== undefined) record.si_so = si_so !== null ? String(si_so).trim() : null;
+            if (si_so !== undefined) record.si_so = si_so !== null ? cleanSiSoHelper(si_so, maPhongChuan) : null;
             if (so_hs_phep !== undefined) record.so_hs_phep = Math.max(0, phepNum);
             if (so_hs_vang !== undefined) record.so_hs_vang = Math.max(0, vangNum);
             if (danh_sach_vang !== undefined) record.danh_sach_vang = danh_sach_vang !== null ? String(danh_sach_vang).trim() : null;
@@ -4885,7 +5088,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
                 ca_truc: loaiTruc,
                 ma_phong: maPhongChuan,
                 ho_ten_gv: hoTenGV,
-                si_so: si_so ? String(si_so).trim() : null,
+                si_so: si_so ? cleanSiSoHelper(si_so, maPhongChuan) : null,
                 so_hs_phep: Math.max(0, phepNum),
                 so_hs_vang: Math.max(0, vangNum),
                 danh_sach_vang: danh_sach_vang ? String(danh_sach_vang).trim() : null,

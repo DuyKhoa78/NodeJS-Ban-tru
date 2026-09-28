@@ -2,6 +2,7 @@
  * Automated Test Suite for Web Bán Trú
  * Covers: QR parsing/matching, Token security/revocation, Duty clusters/permissions, CSV import validation
  */
+require('dotenv').config();
 const assert = require('assert');
 const crypto = require('crypto');
 const { generateToken, verifyToken } = require('../src/utils/token');

@@ -178,6 +178,22 @@ const migrations = [
         console.warn('Migration 20260927_add_link_google_form_to_cauhinhhethong warning:', err.message);
       });
     }
+  },
+  {
+    id: '20260928_add_performance_indexes',
+    async up(sequelize) {
+      await sequelize.query(`
+        CREATE INDEX IF NOT EXISTS idx_diemdanhhs_ngay ON "nghiepvu_diemdanhhs" ("ngay");
+        CREATE INDEX IF NOT EXISTS idx_diemdanhphong_ngay_loai ON "nghiepvu_diemdanhphong" ("ngay", "loai_truc");
+        CREATE INDEX IF NOT EXISTS idx_hocsinh_phong_an_danghoc ON "quanli_hocsinh" ("ma_phong_an_id", "dang_hoc");
+        CREATE INDEX IF NOT EXISTS idx_hocsinh_phong_ngu_danghoc ON "quanli_hocsinh" ("ma_phong_ngu_id", "dang_hoc");
+        CREATE INDEX IF NOT EXISTS idx_phancongtrucgv_ngay_loai ON "nghiepvu_phancongtrucgv" ("ngay", "loai_truc");
+        CREATE INDEX IF NOT EXISTS idx_diemdanhdraft_lookup ON "nghiepvu_diemdanhdraft" ("ngay", "loai_truc", "ma_phong_id");
+        CREATE INDEX IF NOT EXISTS idx_baocaotruc_lookup ON "nghiepvu_baocaotruc" ("ngay", "ca_truc", "ma_phong");
+      `).catch(err => {
+        console.warn('Migration 20260928_add_performance_indexes warning:', err.message);
+      });
+    }
   }
 ];
 
