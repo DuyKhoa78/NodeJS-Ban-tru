@@ -672,6 +672,15 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
         const reqNgay = records[0].ngay;
         const loaiPhongNum = loai === 'an' ? 0 : 1;
 
+        // Quy định: Toàn bộ người dùng (kể cả Admin) không được thao tác với những ngày chưa đến
+        const vn = getVietnamTime();
+        if (reqNgay > vn.todayStr) {
+            return res.status(400).json({
+                ok: false,
+                error: `Không thể điểm danh cho ngày chưa đến (${reqNgay}). Hệ thống chỉ cho phép thao tác với ngày hiện tại và ngày quá khứ.`
+            });
+        }
+
         // Kiểm tra xem ngày điểm danh có thuộc đợt thanh toán đã bị khóa sổ không
         const dotKhoa = await CauHinhDotThanhToan.findOne({
             where: {
@@ -1319,6 +1328,11 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
             return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày, ca trực hoặc phòng' });
         }
 
+        const vn = getVietnamTime();
+        if (ngay > vn.todayStr) {
+            return res.status(400).json({ ok: false, error: `Không thể đồng bộ điểm danh cho ngày chưa đến (${ngay}).` });
+        }
+
         const loaiTrucNum = Number(loai_truc);
 
         // Kiểm tra phân công nếu là giáo viên
@@ -1458,6 +1472,14 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
         const loaiTrucNum = Number(loai_truc);
         const vn = getVietnamTime();
+
+        // Quy định: Toàn bộ người dùng (kể cả Admin) không được chốt sổ với những ngày chưa đến
+        if (ngay > vn.todayStr) {
+            return res.status(400).json({
+                ok: false,
+                error: `Không thể chốt sổ điểm danh cho ngày chưa đến (${ngay}). Hệ thống chỉ cho phép thao tác với ngày hiện tại và ngày quá khứ.`
+            });
+        }
 
         // Nếu là giáo viên, kiểm tra phân công nhiệm vụ
         if (req.user.role === 'giao_vien') {
@@ -1640,6 +1662,11 @@ router.post('/api/diemdanh/mo-chot/', loginRequired, roleRequired('admin', 'hoc_
         const { ngay, loai_truc, ma_phong_id, reset_hs } = req.body;
         if (!ngay || loai_truc === undefined) {
             return res.status(400).json({ ok: false, error: 'Thiếu thông tin ngày hoặc ca trực' });
+        }
+
+        const vn = getVietnamTime();
+        if (ngay > vn.todayStr) {
+            return res.status(400).json({ ok: false, error: `Không thể thao tác mở chốt cho ngày chưa đến (${ngay}).` });
         }
 
         const loaiTrucNum = Number(loai_truc);
@@ -2162,6 +2189,11 @@ router.post('/api/lichtruc/diem-danh/', loginRequired, roleRequired('admin', 'qu
         const pc = await PhanCongTrucGV.findByPk(id);
         if (!pc) return res.status(404).json({ ok: false, error: 'Không tìm thấy phân công' });
 
+        const vn = getVietnamTime();
+        if (pc.ngay > vn.todayStr) {
+            return res.status(400).json({ ok: false, error: `Không thể điểm danh giáo viên trực cho ngày chưa đến (${pc.ngay}).` });
+        }
+
         await pc.update({
             xac_nhan_truc: xac_nhan_truc !== false,
             ngay_cap_nhat: new Date(),
@@ -2179,6 +2211,11 @@ router.post('/api/lichtruc/diem-danh-all/', loginRequired, roleRequired('admin',
     try {
         const { ngay, xac_nhan_truc = true, loai_truc } = req.body;
         if (!ngay) return res.status(400).json({ ok: false, error: 'Thiếu ngày' });
+
+        const vn = getVietnamTime();
+        if (ngay > vn.todayStr) {
+            return res.status(400).json({ ok: false, error: `Không thể điểm danh giáo viên trực cho ngày chưa đến (${ngay}).` });
+        }
 
         const where = { ngay };
         if (loai_truc !== undefined && loai_truc !== null && loai_truc !== '') {
@@ -4584,6 +4621,11 @@ router.post('/api/baocaotruc/update/', loginRequired, async (req, res) => {
 
         if (!id) return res.status(400).json({ ok: false, error: 'Thiếu ID bản ghi báo cáo' });
 
+        const vnToday = getVietnamTime().todayStr;
+        if (ngay !== undefined && ngay > vnToday) {
+            return res.status(400).json({ ok: false, error: `Không thể chuyển ngày báo cáo sang ngày chưa đến trong tương lai (${ngay}).` });
+        }
+
         const record = await BaoCaoTruc.findByPk(id);
         if (!record) return res.status(404).json({ ok: false, error: 'Không tìm thấy bản ghi báo cáo' });
 
@@ -4889,7 +4931,11 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         let choPhepBaoCao = true;
         let lyDoKhoa = null;
 
-        if (!isAdmin) {
+        const isFuture = targetNgay > todayVn;
+        if (isFuture) {
+            choPhepBaoCao = false;
+            lyDoKhoa = `Không thể báo cáo cho ngày chưa đến (${targetNgay}). Hệ thống chỉ cho phép thao tác với ngày hiện tại và ngày quá khứ.`;
+        } else if (!isAdmin) {
             if (!daChotDiemDanh) {
                 choPhepBaoCao = false;
                 lyDoKhoa = chuaChotRooms.length > 0
@@ -4937,7 +4983,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             },
             cho_phep_bao_cao: choPhepBaoCao,
             ly_do_khoa: lyDoKhoa,
-            is_admin_override: Boolean(isAdmin),
+            is_admin_override: Boolean(isAdmin && !isFuture),
             bao_cao_cu: existingReport ? {
                 id: existingReport.id,
                 tinh_hinh: existingReport.tinh_hinh,
@@ -4987,15 +5033,23 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
         const phepNum = parseInt(so_hs_phep, 10) || 0;
 
         const isAdmin = req.user.role === 'admin' || req.user.role === 'quan_ly' || req.user.role === 'hoc_vu' || req.user.is_superuser;
+        const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
+        const todayVn = vnNow.toISOString().split('T')[0];
+
+        // Quy định: Toàn bộ người dùng (kể cả Admin) không được thao tác với những ngày chưa đến
+        if (targetNgay > todayVn) {
+            return res.status(400).json({
+                ok: false,
+                error: `Không thể gửi báo cáo ca trực cho ngày chưa đến (${targetNgay}). Hệ thống chỉ cho phép thao tác với ngày hiện tại và ngày quá khứ.`
+            });
+        }
 
         // KIỂM TRA QUY ĐỊNH THỜI GIAN & ĐIỀU KIỆN ĐIỂM DANH:
         // 1. Báo cáo ăn: từ 11h15 đến 12h00; Báo cáo ngủ: từ 11h45 đến 13h00.
         // 2. GV phải điểm danh xong mới được báo cáo. Sau mốc thời gian này không được báo cáo.
         // 3. Nếu đã báo cáo rồi thì cho phép cập nhật lại nếu trong thời gian quy định.
         if (!isAdmin) {
-            const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
             const curMinutes = vnNow.getUTCHours() * 60 + vnNow.getUTCMinutes();
-            const todayVn = vnNow.toISOString().split('T')[0];
 
             if (targetNgay !== todayVn) {
                 return res.status(400).json({
