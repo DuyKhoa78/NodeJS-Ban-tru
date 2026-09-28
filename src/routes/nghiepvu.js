@@ -318,8 +318,8 @@ async function checkAndAutoRescueRooms(targetNgay) {
         if (isPastDate) {
             eligibleLoais.push(0, 1);
         } else if (isToday) {
-            if (vn.totalMins > 690) eligibleLoais.push(0);
-            if (vn.totalMins > 725) eligibleLoais.push(1);
+            if (vn.totalMins >= 690) eligibleLoais.push(0);
+            if (vn.totalMins >= 725) eligibleLoais.push(1);
         }
 
         if (eligibleLoais.length === 0) return;
@@ -603,6 +603,7 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
         }
 
         const reqNgay = records[0].ngay;
+        const loaiPhongNum = loai === 'an' ? 0 : 1;
 
         // Kiểm tra xem ngày điểm danh có thuộc đợt thanh toán đã bị khóa sổ không
         const dotKhoa = await CauHinhDotThanhToan.findOne({
@@ -655,10 +656,10 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 const startMins = loai === 'an' ? 655 : 690;
                 const endMins = loai === 'an' ? 690 : 725;
                 const timeLabel = loai === 'an' ? '10h55 – 11h30' : '11h30 – 12h05';
-                if (vn.totalMins < startMins || vn.totalMins > endMins) {
+                if (vn.totalMins < startMins || vn.totalMins >= endMins) {
                     return res.status(403).json({
                         ok: false,
-                        error: `Khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.`
+                        error: `Khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} là từ ${timeLabel} (khóa lúc ${loai === 'an' ? '11h30' : '12h05'}). Hiện tại hệ thống đang khóa.`
                     });
                 }
             } else if (req.user.role === 'hoc_vu') {
@@ -674,7 +675,6 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
 
         const field = loai === 'an' ? 'diem_danh_an' : 'diem_danh_ngu';
         const fieldPhong = loai === 'an' ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
-        const loaiPhongNum = loai === 'an' ? 0 : 1;
         const t = await sequelize.transaction();
         try {
             const oppositeField = loai === 'an' ? 'diem_danh_ngu' : 'diem_danh_an';
@@ -1083,7 +1083,7 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             let timeState = 'sap_den'; // 'sap_den' | 'dang_dien_ra' | 'da_qua_gio'
             if (targetNgay === vn.todayStr) {
                 if (vn.totalMins < startMins) timeState = 'sap_den';
-                else if (vn.totalMins <= endMins) timeState = 'dang_dien_ra';
+                else if (vn.totalMins < endMins) timeState = 'dang_dien_ra';
                 else timeState = 'da_qua_gio';
             } else if (targetNgay > vn.todayStr) {
                 timeState = 'sap_den';
@@ -1250,7 +1250,7 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
             const startMins = loaiTrucNum === 0 ? 655 : 690;
             const endMins = loaiTrucNum === 0 ? 690 : 725;
             const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
-            if (vn.totalMins < startMins || vn.totalMins > endMins) {
+            if (vn.totalMins < startMins || vn.totalMins >= endMins) {
                 return res.status(403).json({ ok: false, error: `Khung giờ điểm danh ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
             }
         }
@@ -1387,7 +1387,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             const startMins = loaiTrucNum === 0 ? 655 : 690;
             const endMins = loaiTrucNum === 0 ? 690 : 725;
             const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
-            if (vn.totalMins < startMins || vn.totalMins > endMins) {
+            if (vn.totalMins < startMins || vn.totalMins >= endMins) {
                 return res.status(403).json({ ok: false, error: `Khung giờ chốt sổ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
             }
         }
@@ -4633,8 +4633,8 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const finalPhep = existingReport?.so_hs_phep !== undefined ? existingReport.so_hs_phep : countPhep;
 
         // 5. Kiểm tra điều kiện điểm danh xong & Khung giờ quy định
-        // Báo cáo Ăn: 11h15 (675) đến 12h00 (720)
-        // Báo cáo Ngủ: 11h45 (705) đến 13h00 (780)
+        // Báo cáo Ăn: 11h15 (675) đến 11h45 (705)
+        // Báo cáo Ngủ: 11h40 (700) đến 12h45 (765)
         const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
         const curMinutes = vnNow.getUTCHours() * 60 + vnNow.getUTCMinutes();
         const curHourStr = String(vnNow.getUTCHours()).padStart(2, '0') + ':' + String(vnNow.getUTCMinutes()).padStart(2, '0');
@@ -4642,10 +4642,10 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const isToday = targetNgay === todayVn;
 
         const isCaAn = loaiTruc === 0 || loaiTruc === 2;
-        const minMinutes = isCaAn ? 675 : 705; // 11:15 hoặc 11:45
-        const maxMinutes = isCaAn ? 720 : 780; // 12:00 hoặc 13:00
-        const gioMoCua = isCaAn ? '11:15' : '11:45';
-        const gioDongCua = isCaAn ? '12:00' : '13:00';
+        const minMinutes = isCaAn ? 675 : 700; // 11:15 hoặc 11:40
+        const maxMinutes = isCaAn ? 705 : 765; // 11:45 hoặc 12:45
+        const gioMoCua = isCaAn ? '11:15' : '11:40';
+        const gioDongCua = isCaAn ? '11:45' : '12:45';
 
         let timeState = 'trong_gio'; // 'chua_den' | 'trong_gio' | 'qua_gio'
         let timeMessage = '';
@@ -4656,7 +4656,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                 timeState = 'chua_den';
                 const waitMins = minMinutes - curMinutes;
                 timeMessage = `Chưa tới thời gian báo cáo quy định (${gioMoCua} – ${gioDongCua}, còn ${waitMins} phút).`;
-            } else if (curMinutes > maxMinutes) {
+            } else if (curMinutes >= maxMinutes) {
                 timeState = 'qua_gio';
                 timeMessage = `Đã quá thời gian báo cáo quy định (đã đóng lúc ${gioDongCua}).`;
             } else {
@@ -4802,10 +4802,10 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
             }
 
             const isCaAn = loaiTruc === 0 || loaiTruc === 2;
-            const minMinutes = isCaAn ? 675 : 705; // 11h15 hoặc 11h45
-            const maxMinutes = isCaAn ? 720 : 780; // 12h00 hoặc 13h00
-            const timeRangeText = isCaAn ? '11h15 đến 12h00' : '11h45 đến 13h00';
-            const timeEndText = isCaAn ? '12h00' : '13h00';
+            const minMinutes = isCaAn ? 675 : 700; // 11h15 hoặc 11h40
+            const maxMinutes = isCaAn ? 705 : 765; // 11h45 hoặc 12h45
+            const timeRangeText = isCaAn ? '11h15 đến 11h45' : '11h40 đến 12h45';
+            const timeEndText = isCaAn ? '11h45' : '12h45';
 
             if (curMinutes < minMinutes) {
                 return res.status(400).json({
@@ -4814,7 +4814,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
                 });
             }
 
-            if (curMinutes > maxMinutes) {
+            if (curMinutes >= maxMinutes) {
                 return res.status(400).json({
                     ok: false,
                     error: `Đã quá thời gian báo cáo quy định (đã đóng lúc ${timeEndText}). Sau khoảng mốc thời gian này hệ thống không tiếp nhận hoặc cập nhật báo cáo!`

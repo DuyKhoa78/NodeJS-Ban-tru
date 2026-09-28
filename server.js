@@ -82,9 +82,10 @@ app.use((req, res, next) => {
 });
 
 // ─── 4. Rate Limiting ─────────────────────────────────────────────────────────
+// Cấu hình tối ưu cho môi trường trường học: Nhiều GV dùng chung 1 địa chỉ IP qua Wi-Fi trường
 const generalApiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 phút
-  max: 300, // Tối đa 300 requests/phút mỗi IP
+  max: 2000, // Tối đa 2000 requests/phút mỗi IP (đảm bảo 30-50 GV chung Wi-Fi không bị chặn)
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: 'Quá nhiều yêu cầu từ IP của bạn, vui lòng thử lại sau ít phút.' },
@@ -92,7 +93,7 @@ const generalApiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 phút
-  max: 50, // Tối đa 50 lần thử auth/login mỗi 15 phút
+  max: 300, // Tối đa 300 lần thử auth/login mỗi 15 phút (cho phép toàn bộ GV cùng đăng nhập giờ cao điểm)
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: 'Quá nhiều yêu cầu đăng nhập/xác thực, vui lòng thử lại sau 15 phút.' },
