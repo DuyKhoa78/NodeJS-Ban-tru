@@ -6,7 +6,7 @@ const NodeCache = require('node-cache');
 const {
     HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong, DiemDanhDraft,
     PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
-    BaoCaoTruc, LichSuPhanPhong, CauHinhDotThanhToan, ThuTienBanTru
+    BaoCaoTruc, LichSuPhanPhong, CauHinhDotThanhToan, ThuTienBanTru, KyTrucGV, ThanhToanLuongGV, LichSuThaoTac
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
@@ -2603,14 +2603,23 @@ router.get('/api/lichtruc/audit-log/', loginRequired, roleRequired('admin', 'qua
 // BÁO CÁO
 // ══════════════════════════════════════════════
 
-/** GET /api/baocao/diemdanh/?loai=&thang=&nam=&lop= */
+/** GET /api/baocao/diemdanh/?loai=&thang=&nam=&lop=&tu_ngay=&den_ngay= */
 router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
     try {
-        const { loai, thang, nam, lop } = req.query;
-        const year = nam || new Date().getFullYear();
-        const month = thang || (new Date().getMonth() + 1);
-        const start = `${year}-${String(month).padStart(2, '0')}-01`;
-        const end = getLastDayYMD(year, month);
+        const { loai, thang, nam, lop, tu_ngay, den_ngay } = req.query;
+        let start, end;
+        if (tu_ngay && den_ngay) {
+            if (tu_ngay > den_ngay) {
+                return res.status(400).json({ ok: false, error: 'Từ ngày không được lớn hơn Đến ngày' });
+            }
+            start = tu_ngay;
+            end = den_ngay;
+        } else {
+            const year = nam || new Date().getFullYear();
+            const month = thang || (new Date().getMonth() + 1);
+            start = `${year}-${String(month).padStart(2, '0')}-01`;
+            end = getLastDayYMD(year, month);
+        }
 
         const hsWhere = { dang_hoc: true };
         if (lop) hsWhere.lop = lop;
@@ -2667,7 +2676,7 @@ router.get('/api/baocao/diemdanh/', loginRequired, async (req, res) => {
             };
         });
 
-        return res.json({ ok: true, data, thang: `${year}-${month}` });
+        return res.json({ ok: true, data, tu_ngay: start, den_ngay: end, thang: `${start.slice(0, 7)}` });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
 
@@ -3443,7 +3452,165 @@ router.get('/api/baocao/suat-an-thang/', loginRequired, async (req, res) => {
     }
 });
 
-/** GET /api/baocao/luong-gv/?tu_ngay=&den_ngay=&thang=&nam= */
+// ── Helper tính tiền trực giáo viên theo khoảng ngày ─────────────────
+async function calculateTeacherDutySalary(start, end) {
+    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+    const effectiveEnd = end > todayVN ? todayVN : end;
+
+    let phanCong = [];
+    if (start <= effectiveEnd) {
+        phanCong = await PhanCongTrucGV.findAll({
+            where: {
+                ngay: { [Op.between]: [start, effectiveEnd] },
+                xac_nhan_truc: { [Op.ne]: false },
+            },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
+            ],
+            order: [['ngay', 'ASC']]
+        });
+    }
+
+    const allCauHinhGia = await CauHinhGia.findAll({
+        where: {
+            loai_truc: { [Op.in]: [0, 1] },
+            ngay_ap_dung: { [Op.lte]: effectiveEnd }
+        },
+        order: [['ngay_ap_dung', 'ASC']],
+        raw: true
+    });
+
+    const getDonGiaGV = (ngay, loaiTruc) => {
+        const matched = allCauHinhGia
+            .filter(g => g.loai_truc === loaiTruc && g.ngay_ap_dung <= ngay)
+            .pop();
+        if (matched) return parseFloat(matched.don_gia);
+        return loaiTruc === 0 ? 100000 : 180000;
+    };
+
+    const don_gia_an = getDonGiaGV(effectiveEnd, 0);
+    const don_gia_ngu = getDonGiaGV(effectiveEnd, 1);
+
+    const gvMap = {};
+    const seenShift = new Set();
+    phanCong.forEach(pc => {
+        let actualId, actualName, isNgoai = false, gvDbId = null;
+        const isSubstitute = Boolean(
+            (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) ||
+            pc.ma_gv_truc_thay_id
+        );
+
+        if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+            const cleanName = pc.ten_gv_truc_thay.trim();
+            actualId = `ngoai_${cleanName}`;
+            actualName = cleanName;
+            isNgoai = true;
+        } else if (pc.ma_gv_truc_thay_id) {
+            actualId = pc.ma_gv_truc_thay_id;
+            actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+            gvDbId = pc.ma_gv_truc_thay_id;
+        } else {
+            actualId = pc.ma_gv_id;
+            actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
+            gvDbId = pc.ma_gv_id;
+        }
+
+        if (!gvMap[actualId]) gvMap[actualId] = {
+            id: actualId,
+            ma_gv_id: gvDbId,
+            ho_ten: actualName,
+            is_ngoai: isNgoai,
+            so_ca_an: 0,
+            so_ca_ngu: 0,
+            so_ca_truc_thay: 0,
+            so_ca_bi_thay: 0,
+            tong_tien: 0,
+            ngay_an: [],
+            ngay_ngu: [],
+            chi_tiet_truc_thay: [],
+            chi_tiet_bi_thay: [],
+            ca_chi_tiet: [],
+        };
+
+        const shiftKey = `${actualId}_${pc.ngay}_${pc.loai_truc}`;
+        if (seenShift.has(shiftKey)) return;
+        seenShift.add(shiftKey);
+
+        const donGia = getDonGiaGV(pc.ngay, pc.loai_truc);
+        gvMap[actualId].ca_chi_tiet.push({
+            ngay: pc.ngay,
+            loai_truc: pc.loai_truc,
+            don_gia: donGia
+        });
+
+        if (pc.loai_truc === 0) {
+            gvMap[actualId].so_ca_an++;
+            gvMap[actualId].tong_tien += donGia;
+            gvMap[actualId].ngay_an.push(pc.ngay);
+        } else {
+            gvMap[actualId].so_ca_ngu++;
+            gvMap[actualId].tong_tien += donGia;
+            gvMap[actualId].ngay_ngu.push(pc.ngay);
+        }
+
+        if (isSubstitute) {
+            gvMap[actualId].so_ca_truc_thay++;
+            gvMap[actualId].chi_tiet_truc_thay.push({
+                ngay: pc.ngay,
+                loai_truc: pc.loai_truc,
+                phong: pc.ma_phong_id,
+                thay_cho: pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`
+            });
+
+            const originalId = pc.ma_gv_id;
+            const originalName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
+            if (!gvMap[originalId]) {
+                gvMap[originalId] = {
+                    id: originalId,
+                    ma_gv_id: originalId,
+                    ho_ten: originalName,
+                    is_ngoai: false,
+                    so_ca_an: 0,
+                    so_ca_ngu: 0,
+                    so_ca_truc_thay: 0,
+                    so_ca_bi_thay: 0,
+                    tong_tien: 0,
+                    ngay_an: [],
+                    ngay_ngu: [],
+                    chi_tiet_truc_thay: [],
+                    chi_tiet_bi_thay: [],
+                    ca_chi_tiet: [],
+                };
+            }
+            gvMap[originalId].so_ca_bi_thay++;
+            gvMap[originalId].chi_tiet_bi_thay.push({
+                ngay: pc.ngay,
+                loai_truc: pc.loai_truc,
+                phong: pc.ma_phong_id,
+                nguoi_thay: actualName
+            });
+        }
+    });
+
+    const gvList = Object.values(gvMap);
+    const totCaAn = gvList.reduce((a, b) => a + b.so_ca_an, 0);
+    const totCaNgu = gvList.reduce((a, b) => a + b.so_ca_ngu, 0);
+    const totTien = gvList.reduce((a, b) => a + b.tong_tien, 0);
+
+    return {
+        gvList,
+        don_gia_an,
+        don_gia_ngu,
+        totCaAn,
+        totCaNgu,
+        totTien,
+        todayVN,
+        effectiveEnd
+    };
+}
+
+/** GET /api/baocao/luong-gv/?tu_ngay=&den_ngay=&thang=&nam= (Tương thích ngược) */
 router.get('/api/baocao/luong-gv/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
     try {
         let start, end;
@@ -3457,156 +3624,581 @@ router.get('/api/baocao/luong-gv/', loginRequired, roleRequired('admin', 'quan_l
             end = getLastDayYMD(year, month);
         }
 
-        // Lấy ngày hiện tại theo giờ Việt Nam
-        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
-
-        // Giới hạn tính toán: Không tính tiền cho các ngày tương lai chưa tới (ngay <= todayVN).
-        // Chỉ tính công và tiền lương cho các ngày đã thực tế diễn ra đến thời điểm hiện tại.
-        const effectiveEnd = end > todayVN ? todayVN : end;
-
-        let phanCong = [];
-        if (start <= effectiveEnd) {
-            phanCong = await PhanCongTrucGV.findAll({
-                where: {
-                    ngay: { [Op.between]: [start, effectiveEnd] },
-                    xac_nhan_truc: { [Op.ne]: false }, // Chỉ tính các ca có mặt trực thực tế
-                },
-                include: [
-                    { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
-                    { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
-                ],
-            });
-        }
-
-        // Lấy toàn bộ lịch sử đơn giá có hiệu lực đến effectiveEnd
-        const allCauHinhGia = await CauHinhGia.findAll({
-            where: {
-                loai_truc: { [Op.in]: [0, 1] },
-                ngay_ap_dung: { [Op.lte]: effectiveEnd }
-            },
-            order: [['ngay_ap_dung', 'ASC']],
-            raw: true
-        });
-
-        const getDonGiaGV = (ngay, loaiTruc) => {
-            const matched = allCauHinhGia
-                .filter(g => g.loai_truc === loaiTruc && g.ngay_ap_dung <= ngay)
-                .pop();
-            if (matched) return parseFloat(matched.don_gia);
-            return loaiTruc === 0 ? 100000 : 180000;
-        };
-
-        const don_gia_an = getDonGiaGV(effectiveEnd, 0);
-        const don_gia_ngu = getDonGiaGV(effectiveEnd, 1);
-
-        // Đếm lượt trực DISTINCT theo (người trực thực tế, ca của giáo viên gốc, ngày, ca)
-        const gvMap = {};
-        const seenShift = new Set();
-        phanCong.forEach(pc => {
-            let actualId, actualName, isNgoai = false;
-            const isSubstitute = Boolean(
-                (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) ||
-                pc.ma_gv_truc_thay_id
-            );
-
-            if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
-                const cleanName = pc.ten_gv_truc_thay.trim();
-                actualId = `ngoai_${cleanName}`;
-                actualName = cleanName;
-                isNgoai = true;
-            } else if (pc.ma_gv_truc_thay_id) {
-                actualId = pc.ma_gv_truc_thay_id;
-                actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
-            } else {
-                actualId = pc.ma_gv_id;
-                actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
-            }
-
-            if (!gvMap[actualId]) gvMap[actualId] = {
-                id: actualId,
-                ho_ten: actualName,
-                is_ngoai: isNgoai,
-                so_ca_an: 0,
-                so_ca_ngu: 0,
-                so_ca_truc_thay: 0,
-                so_ca_bi_thay: 0,
-                tong_tien: 0,
-                ngay_an: [],
-                ngay_ngu: [],
-                chi_tiet_truc_thay: [],
-                chi_tiet_bi_thay: [],
-            };
-
-            // Deduplicate theo người trực thực tế + ca của giáo viên gốc + ngày + loại trực
-            // (Đảm bảo: nếu 1 ca phụ trách cụm phòng nhỏ P6-P7-P8 thì chỉ tính 1 ca,
-            //  nhưng nếu một GV vừa trực ca của mình vừa trực thay cho GV khác thì ca trực thay VẪN ĐƯỢC TÍNH TIỀN ĐẦY ĐỦ)
-            // GV có thể trực nhiều phòng cùng lúc trong 1 ca (loại trực) nhưng chỉ tính 1 công/tiền
-            const shiftKey = `${actualId}_${pc.ngay}_${pc.loai_truc}`;
-            if (seenShift.has(shiftKey)) return; // Tránh tính trùng nếu 1 người trực nhiều phòng trong cùng 1 ca
-            seenShift.add(shiftKey);
-
-            const donGia = getDonGiaGV(pc.ngay, pc.loai_truc);
-            if (pc.loai_truc === 0) {
-                gvMap[actualId].so_ca_an++;
-                gvMap[actualId].tong_tien += donGia;
-                gvMap[actualId].ngay_an.push(pc.ngay);
-            } else {
-                gvMap[actualId].so_ca_ngu++;
-                gvMap[actualId].tong_tien += donGia;
-                gvMap[actualId].ngay_ngu.push(pc.ngay);
-            }
-
-            if (isSubstitute) {
-                gvMap[actualId].so_ca_truc_thay++;
-                gvMap[actualId].chi_tiet_truc_thay.push({
-                    ngay: pc.ngay,
-                    loai_truc: pc.loai_truc,
-                    phong: pc.ma_phong_id,
-                    thay_cho: pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`
-                });
-
-                // Ghi nhận số ca bị thay cho GV gốc để đối soát minh bạch
-                const originalId = pc.ma_gv_id;
-                const originalName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
-                if (!gvMap[originalId]) {
-                    gvMap[originalId] = {
-                        id: originalId,
-                        ho_ten: originalName,
-                        is_ngoai: false,
-                        so_ca_an: 0,
-                        so_ca_ngu: 0,
-                        so_ca_truc_thay: 0,
-                        so_ca_bi_thay: 0,
-                        tong_tien: 0,
-                        ngay_an: [],
-                        ngay_ngu: [],
-                        chi_tiet_truc_thay: [],
-                        chi_tiet_bi_thay: [],
-                    };
-                }
-                gvMap[originalId].so_ca_bi_thay++;
-                gvMap[originalId].chi_tiet_bi_thay.push({
-                    ngay: pc.ngay,
-                    loai_truc: pc.loai_truc,
-                    phong: pc.ma_phong_id,
-                    nguoi_thay: actualName
-                });
-            }
-        });
+        const calc = await calculateTeacherDutySalary(start, end);
         const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
         const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
 
         return res.json({
             ok: true,
-            data: Object.values(gvMap),
-            don_gia_an,
-            don_gia_ngu,
-            today: todayVN,
-            effective_end: effectiveEnd,
+            data: calc.gvList,
+            don_gia_an: calc.don_gia_an,
+            don_gia_ngu: calc.don_gia_ngu,
+            today: calc.todayVN,
+            effective_end: calc.effectiveEnd,
             quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
             ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
         });
-    } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** GET /api/baocao/ky-truc/ - Danh sách các kỳ trực giáo viên kèm trạng thái thanh toán */
+router.get('/api/baocao/ky-truc/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        let list = await KyTrucGV.findAll({ order: [['tu_ngay', 'ASC']] });
+        if (list.length === 0) {
+            const firstKy = await KyTrucGV.create({
+                ten_ky: 'Kỳ 1',
+                tu_ngay: '2026-09-07',
+                den_ngay: null,
+                trang_thai: 'dang_dien_ra',
+                nam_hoc: '2026-2027',
+            });
+            list = [firstKy];
+        }
+
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+        const result = [];
+        for (const item of list) {
+            const k = item.toJSON();
+            const payments = await ThanhToanLuongGV.findAll({
+                where: { ky_truc_id: k.id, trang_thai: 'thanh_cong' },
+                attributes: ['so_tien']
+            });
+            const da_thanh_toan = payments.reduce((sum, p) => sum + parseFloat(p.so_tien || 0), 0);
+
+            let tien_phat_sinh = 0;
+            if (k.trang_thai === 'dang_dien_ra') {
+                const calc = await calculateTeacherDutySalary(k.tu_ngay, todayVN);
+                tien_phat_sinh = calc.totTien;
+                k.tong_ca_an = calc.totCaAn;
+                k.tong_ca_ngu = calc.totCaNgu;
+                k.tong_so_gv = calc.gvList.length;
+            } else {
+                tien_phat_sinh = parseFloat(k.tong_tien || 0);
+            }
+
+            k.tien_phat_sinh = tien_phat_sinh;
+            k.da_thanh_toan = da_thanh_toan;
+            k.con_lai = Math.max(0, tien_phat_sinh - da_thanh_toan);
+            if (k.con_lai === 0 && da_thanh_toan > 0) {
+                k.trang_thai_thanh_toan = 'da_thanh_toan';
+            } else if (da_thanh_toan > 0) {
+                k.trang_thai_thanh_toan = 'thanh_toan_mot_phan';
+            } else {
+                k.trang_thai_thanh_toan = 'chua_thanh_toan';
+            }
+            result.push(k);
+        }
+
+        return res.json({ ok: true, data: result });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** GET /api/baocao/ky-truc/:id/preview-chot - Xem trước số liệu trước khi chốt kỳ */
+router.get('/api/baocao/ky-truc/:id/preview-chot', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const ky = await KyTrucGV.findByPk(req.params.id);
+        if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ trực' });
+        if (ky.trang_thai !== 'dang_dien_ra') {
+            return res.status(400).json({ ok: false, error: 'Kỳ trực này đã được chốt trước đó' });
+        }
+
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const den_ngay = req.query.den_ngay || todayVN;
+
+        if (den_ngay < ky.tu_ngay) {
+            return res.status(400).json({ ok: false, error: `Ngày kết thúc (${den_ngay}) không được trước ngày bắt đầu (${ky.tu_ngay})` });
+        }
+        if (den_ngay > todayVN) {
+            return res.status(400).json({ ok: false, error: 'Không được chốt kỳ vào ngày tương lai' });
+        }
+
+        const calc = await calculateTeacherDutySalary(ky.tu_ngay, den_ngay);
+
+        return res.json({
+            ok: true,
+            preview: {
+                ten_ky: ky.ten_ky,
+                tu_ngay: ky.tu_ngay,
+                den_ngay,
+                tong_so_gv: calc.gvList.length,
+                tong_ca_an: calc.totCaAn,
+                tong_ca_ngu: calc.totCaNgu,
+                tong_tien: calc.totTien
+            }
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/baocao/ky-truc/:id/chot - Chốt kỳ hiện tại và mở kỳ mới bắt đầu từ ngày kế tiếp */
+router.post('/api/baocao/ky-truc/:id/chot', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const ky = await KyTrucGV.findByPk(req.params.id);
+        if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ trực' });
+        if (ky.trang_thai !== 'dang_dien_ra') {
+            return res.status(400).json({ ok: false, error: 'Kỳ trực này đã được chốt trước đó' });
+        }
+
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const { den_ngay, ghi_chu } = req.body;
+        if (!den_ngay) {
+            return res.status(400).json({ ok: false, error: 'Vui lòng chọn ngày kết thúc để chốt kỳ' });
+        }
+        if (den_ngay < ky.tu_ngay) {
+            return res.status(400).json({ ok: false, error: `Ngày kết thúc (${den_ngay}) không được trước ngày bắt đầu (${ky.tu_ngay})` });
+        }
+        if (den_ngay > todayVN) {
+            return res.status(400).json({ ok: false, error: 'Không được chốt kỳ vào ngày tương lai' });
+        }
+
+        // Chặn chồng lấn với các kỳ khác đã tồn tại
+        const overlap = await KyTrucGV.findOne({
+            where: {
+                id: { [Op.ne]: ky.id },
+                [Op.and]: [
+                    { tu_ngay: { [Op.lte]: den_ngay } },
+                    sequelize.where(
+                        sequelize.fn('COALESCE', sequelize.col('den_ngay'), '9999-12-31'),
+                        { [Op.gte]: ky.tu_ngay }
+                    )
+                ]
+            }
+        });
+        if (overlap) {
+            return res.status(400).json({ ok: false, error: `Khoảng ngày chồng lấn với ${overlap.ten_ky} (${overlap.tu_ngay} đến ${overlap.den_ngay || 'nay'})` });
+        }
+
+        const calc = await calculateTeacherDutySalary(ky.tu_ngay, den_ngay);
+
+        await ky.update({
+            den_ngay,
+            trang_thai: 'da_chot',
+            ngay_chot: new Date(),
+            nguoi_chot_id: req.user.id,
+            nguoi_chot_ten: req.user.fullname || req.user.username,
+            tong_so_gv: calc.gvList.length,
+            tong_ca_an: calc.totCaAn,
+            tong_ca_ngu: calc.totCaNgu,
+            tong_tien: calc.totTien,
+            ghi_chu: ghi_chu || null,
+        });
+
+        // Tạo kỳ mới bắt đầu từ ngày kế tiếp
+        const nextStart = addDays(den_ngay, 1);
+        const count = await KyTrucGV.count();
+        const nextKy = await KyTrucGV.create({
+            ten_ky: `Kỳ ${count + 1}`,
+            tu_ngay: nextStart,
+            den_ngay: null,
+            trang_thai: 'dang_dien_ra',
+            nam_hoc: ky.nam_hoc,
+        });
+
+        if (LichSuThaoTac) {
+            await LichSuThaoTac.create({
+                loai: 'CHOT_KY_TRUC',
+                noidung: `Chốt ${ky.ten_ky} (${ky.tu_ngay} đến ${den_ngay}) - Số tiền: ${calc.totTien.toLocaleString('vi-VN')} đ. Đã mở ${nextKy.ten_ky} từ ngày ${nextStart}`,
+                nguoi_thao_tac_id: req.user.id,
+                nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                chuc_vu: req.user.role,
+                created_at: new Date()
+            }).catch(() => {});
+        }
+
+        return res.json({
+            ok: true,
+            message: `Đã chốt ${ky.ten_ky} thành công và tự động tạo ${nextKy.ten_ky} bắt đầu từ ${nextStart}`,
+            closed_ky: ky,
+            new_ky: nextKy
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** GET /api/baocao/ky-truc/:id/chi-tiet - Chi tiết bảng lương, công trực và các phiếu thanh toán của kỳ */
+router.get('/api/baocao/ky-truc/:id/chi-tiet', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const ky = await KyTrucGV.findByPk(req.params.id);
+        if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ trực' });
+
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const endDate = ky.trang_thai === 'da_chot' ? ky.den_ngay : (ky.den_ngay || todayVN);
+
+        const calc = await calculateTeacherDutySalary(ky.tu_ngay, endDate);
+
+        // Lấy tất cả lịch sử thanh toán của kỳ này
+        const allPayments = await ThanhToanLuongGV.findAll({
+            where: { ky_truc_id: ky.id },
+            order: [['created_at', 'DESC']]
+        });
+
+        // Gắn thông tin thanh toán cho từng giáo viên
+        const activePayments = allPayments.filter(p => p.trang_thai === 'thanh_cong');
+
+        const gvListWithPayment = calc.gvList.map(g => {
+            const gvPayments = activePayments.filter(p => {
+                if (g.ma_gv_id && p.ma_gv_id) return p.ma_gv_id === g.ma_gv_id;
+                return p.ten_gv?.trim().toLowerCase() === g.ho_ten?.trim().toLowerCase();
+            });
+            const da_thanh_toan = gvPayments.reduce((s, p) => s + parseFloat(p.so_tien || 0), 0);
+            const con_lai = Math.max(0, g.tong_tien - da_thanh_toan);
+            let trang_thai_thanh_toan = 'chua_thanh_toan';
+            if (con_lai === 0 && da_thanh_toan > 0) {
+                trang_thai_thanh_toan = 'da_thanh_toan';
+            } else if (da_thanh_toan > 0) {
+                trang_thai_thanh_toan = 'thanh_toan_mot_phan';
+            }
+            return {
+                ...g,
+                da_thanh_toan,
+                con_lai,
+                trang_thai_thanh_toan,
+                lich_su_thanh_toan: allPayments.filter(p => {
+                    if (g.ma_gv_id && p.ma_gv_id) return p.ma_gv_id === g.ma_gv_id;
+                    return p.ten_gv?.trim().toLowerCase() === g.ho_ten?.trim().toLowerCase();
+                })
+            };
+        });
+
+        const totDaThanhToan = activePayments.reduce((s, p) => s + parseFloat(p.so_tien || 0), 0);
+        const totConLai = Math.max(0, calc.totTien - totDaThanhToan);
+        let trang_thai_thanh_toan = 'chua_thanh_toan';
+        if (totConLai === 0 && totDaThanhToan > 0) {
+            trang_thai_thanh_toan = 'da_thanh_toan';
+        } else if (totDaThanhToan > 0) {
+            trang_thai_thanh_toan = 'thanh_toan_mot_phan';
+        }
+
+        const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
+        const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
+
+        return res.json({
+            ok: true,
+            ky: ky.toJSON(),
+            data: gvListWithPayment,
+            gv_list: gvListWithPayment,
+            summary: {
+                tong_so_gv: gvListWithPayment.length,
+                totCaAn: calc.totCaAn,
+                totCaNgu: calc.totCaNgu,
+                totTien: calc.totTien,
+                totDaThanhToan,
+                totConLai,
+                trang_thai_thanh_toan,
+                today: todayVN,
+                effectiveEnd: calc.effectiveEnd
+            },
+            lich_su_thanh_toan: allPayments,
+            don_gia_an: calc.don_gia_an,
+            don_gia_ngu: calc.don_gia_ngu,
+            quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
+            ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/baocao/ky-truc/:id/thanh-toan - Thực hiện thanh toán tiền trực (từng giáo viên hoặc tất cả) */
+router.post('/api/baocao/ky-truc/:id/thanh-toan', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const ky = await KyTrucGV.findByPk(req.params.id);
+        if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ trực' });
+
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const { loai, ma_gv_id, ten_gv, so_tien, hinh_thuc = 'chuyen_khoan', ghi_chu, ngay_thanh_toan = todayVN } = req.body;
+
+        const endDate = ky.trang_thai === 'da_chot' ? ky.den_ngay : (ky.den_ngay || todayVN);
+        const calc = await calculateTeacherDutySalary(ky.tu_ngay, endDate);
+
+        const activePayments = await ThanhToanLuongGV.findAll({
+            where: { ky_truc_id: ky.id, trang_thai: 'thanh_cong' }
+        });
+
+        if (loai === 'tung_gv') {
+            if (!ten_gv || !ten_gv.trim()) {
+                return res.status(400).json({ ok: false, error: 'Thiếu tên giáo viên được thanh toán' });
+            }
+            const amount = parseFloat(so_tien);
+            if (isNaN(amount) || amount <= 0) {
+                return res.status(400).json({ ok: false, error: 'Số tiền thanh toán phải lớn hơn 0' });
+            }
+
+            // Tìm giáo viên trong danh sách trực của kỳ
+            const matchedGv = calc.gvList.find(g => {
+                if (ma_gv_id && g.ma_gv_id) return g.ma_gv_id === parseInt(ma_gv_id, 10);
+                return g.ho_ten?.trim().toLowerCase() === ten_gv.trim().toLowerCase();
+            });
+
+            const tongTienGV = matchedGv ? matchedGv.tong_tien : 0;
+            const daTraGV = activePayments
+                .filter(p => {
+                    if (ma_gv_id && p.ma_gv_id) return p.ma_gv_id === parseInt(ma_gv_id, 10);
+                    return p.ten_gv?.trim().toLowerCase() === ten_gv.trim().toLowerCase();
+                })
+                .reduce((s, p) => s + parseFloat(p.so_tien || 0), 0);
+
+            const conLaiGV = Math.max(0, tongTienGV - daTraGV);
+            if (amount > conLaiGV) {
+                return res.status(400).json({
+                    ok: false,
+                    error: `Số tiền thanh toán (${amount.toLocaleString('vi-VN')} đ) vượt quá số tiền còn lại phải trả (${conLaiGV.toLocaleString('vi-VN')} đ)`
+                });
+            }
+
+            const payment = await ThanhToanLuongGV.create({
+                ky_truc_id: ky.id,
+                ma_gv_id: matchedGv?.ma_gv_id || null,
+                ten_gv: matchedGv?.ho_ten || ten_gv.trim(),
+                so_tien: amount,
+                ngay_thanh_toan,
+                hinh_thuc,
+                nguoi_thao_tac_id: req.user.id,
+                nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                ghi_chu: ghi_chu || null,
+                trang_thai: 'thanh_cong'
+            });
+
+            if (LichSuThaoTac) {
+                await LichSuThaoTac.create({
+                    loai: 'THANH_TOAN_LUONG_GV',
+                    noidung: `Thanh toán tiền trực cho ${payment.ten_gv}: ${amount.toLocaleString('vi-VN')} đ (${ky.ten_ky})`,
+                    nguoi_thao_tac_id: req.user.id,
+                    nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                    chuc_vu: req.user.role,
+                    created_at: new Date()
+                }).catch(() => {});
+            }
+
+            return res.json({ ok: true, message: 'Thanh toán thành công', payment });
+        } else if (loai === 'tat_ca') {
+            // Thanh toán toàn bộ số tiền còn lại cho tất cả giáo viên chưa nhận đủ
+            const created = [];
+            for (const g of calc.gvList) {
+                const daTra = activePayments
+                    .filter(p => {
+                        if (g.ma_gv_id && p.ma_gv_id) return p.ma_gv_id === g.ma_gv_id;
+                        return p.ten_gv?.trim().toLowerCase() === g.ho_ten?.trim().toLowerCase();
+                    })
+                    .reduce((s, p) => s + parseFloat(p.so_tien || 0), 0);
+
+                const conLai = Math.max(0, g.tong_tien - daTra);
+                if (conLai > 0) {
+                    const pRecord = await ThanhToanLuongGV.create({
+                        ky_truc_id: ky.id,
+                        ma_gv_id: g.ma_gv_id || null,
+                        ten_gv: g.ho_ten,
+                        so_tien: conLai,
+                        ngay_thanh_toan,
+                        hinh_thuc,
+                        nguoi_thao_tac_id: req.user.id,
+                        nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                        ghi_chu: ghi_chu || 'Thanh toán toàn bộ kỳ',
+                        trang_thai: 'thanh_cong'
+                    });
+                    created.push(pRecord);
+                }
+            }
+
+            if (created.length === 0) {
+                return res.status(400).json({ ok: false, error: 'Kỳ này đã được thanh toán đầy đủ, không còn dư nợ' });
+            }
+
+            const totalBatch = created.reduce((s, p) => s + parseFloat(p.so_tien), 0);
+
+            if (LichSuThaoTac) {
+                await LichSuThaoTac.create({
+                    loai: 'THANH_TOAN_LUONG_GV',
+                    noidung: `Thanh toán toàn bộ ${ky.ten_ky} cho ${created.length} giáo viên - Tổng chi: ${totalBatch.toLocaleString('vi-VN')} đ`,
+                    nguoi_thao_tac_id: req.user.id,
+                    nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                    chuc_vu: req.user.role,
+                    created_at: new Date()
+                }).catch(() => {});
+            }
+
+            return res.json({ ok: true, message: `Đã thanh toán cho ${created.length} giáo viên với tổng số tiền ${totalBatch.toLocaleString('vi-VN')} đ`, count: created.length });
+        } else {
+            return res.status(400).json({ ok: false, error: 'Loại thanh toán không hợp lệ' });
+        }
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/baocao/thanh-toan/:id/huy - Hủy phiếu thanh toán với lý do bắt buộc */
+router.post('/api/baocao/thanh-toan/:id/huy', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const payment = await ThanhToanLuongGV.findByPk(req.params.id);
+        if (!payment) return res.status(404).json({ ok: false, error: 'Không tìm thấy phiếu thanh toán' });
+        if (payment.trang_thai === 'da_huy') {
+            return res.status(400).json({ ok: false, error: 'Phiếu thanh toán này đã được hủy trước đó' });
+        }
+
+        const reason = req.body.ly_do_huy || req.body.ly_do;
+        if (!reason || !reason.trim()) {
+            return res.status(400).json({ ok: false, error: 'Vui lòng nhập lý do hủy phiếu thanh toán' });
+        }
+
+        await payment.update({
+            trang_thai: 'da_huy',
+            ly_do_huy: reason.trim(),
+            ngay_huy: new Date(),
+            nguoi_huy_ten: req.user.fullname || req.user.username
+        });
+
+        if (LichSuThaoTac) {
+            await LichSuThaoTac.create({
+                loai: 'HUY_THANH_TOAN_LUONG_GV',
+                noidung: `Hủy phiếu thanh toán #${payment.id} của ${payment.ten_gv} (${parseFloat(payment.so_tien).toLocaleString('vi-VN')} đ). Lý do: ${reason.trim()}`,
+                nguoi_thao_tac_id: req.user.id,
+                nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                chuc_vu: req.user.role,
+                created_at: new Date()
+            }).catch(() => {});
+        }
+
+        return res.json({ ok: true, message: 'Đã hủy phiếu thanh toán thành công' });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** GET /api/baocao/thong-ke-luong-gv/ - Thống kê tiền trực linh hoạt theo khoảng ngày tùy chọn */
+router.get('/api/baocao/thong-ke-luong-gv/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const { tu_ngay, den_ngay } = req.query;
+        if (!tu_ngay || !den_ngay) {
+            return res.status(400).json({ ok: false, error: 'Vui lòng chọn Từ ngày và Đến ngày' });
+        }
+        if (tu_ngay > den_ngay) {
+            return res.status(400).json({ ok: false, error: 'Từ ngày không được lớn hơn Đến ngày' });
+        }
+
+        const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const effectiveEnd = den_ngay > todayVN ? todayVN : den_ngay;
+
+        // 1. Tính toán ca trực và tiền trực phát sinh chính xác cho các ca trong khoảng [tu_ngay, effectiveEnd]
+        const calc = await calculateTeacherDutySalary(tu_ngay, effectiveEnd);
+
+        // 2. Tìm tất cả các kỳ trực có ca thuộc khoảng này
+        const allKy = await KyTrucGV.findAll({
+            where: {
+                tu_ngay: { [Op.lte]: effectiveEnd },
+                [Op.and]: [
+                    sequelize.where(
+                        sequelize.fn('COALESCE', sequelize.col('den_ngay'), '9999-12-31'),
+                        { [Op.gte]: tu_ngay }
+                    )
+                ]
+            },
+            order: [['tu_ngay', 'ASC']]
+        });
+
+        // 3. Tính tỷ lệ thanh toán của từng kỳ
+        const kyPaymentRatios = {};
+        const kyInfoList = [];
+
+        for (const ky of allKy) {
+            const kyEndDate = ky.trang_thai === 'da_chot' ? ky.den_ngay : (ky.den_ngay || todayVN);
+            const kyCalc = await calculateTeacherDutySalary(ky.tu_ngay, kyEndDate);
+
+            const kyPayments = await ThanhToanLuongGV.findAll({
+                where: { ky_truc_id: ky.id, trang_thai: 'thanh_cong' },
+                attributes: ['so_tien']
+            });
+            const kyTotalPaid = kyPayments.reduce((s, p) => s + parseFloat(p.so_tien || 0), 0);
+            const kyTotalEarned = kyCalc.totTien;
+
+            const ratio = kyTotalEarned > 0 ? Math.min(1, kyTotalPaid / kyTotalEarned) : 0;
+            kyPaymentRatios[ky.id] = {
+                ky,
+                ratio,
+                kyTotalEarned,
+                kyTotalPaid,
+            };
+
+            kyInfoList.push({
+                id: ky.id,
+                ten_ky: ky.ten_ky,
+                tu_ngay: ky.tu_ngay,
+                den_ngay: ky.den_ngay,
+                trang_thai: ky.trang_thai,
+                tong_tien: kyTotalEarned,
+                da_thanh_toan: kyTotalPaid,
+                ty_le: Math.round(ratio * 100)
+            });
+        }
+
+        // 4. Phân bổ "Đã thanh toán" cho từng giáo viên dựa trên các ca trực của họ trong khoảng ngày
+        const gvListWithRatio = calc.gvList.map(g => {
+            let gvPaidInRange = 0;
+            (g.ca_chi_tiet || []).forEach(ca => {
+                const matchedKy = allKy.find(k => {
+                    const kEnd = k.den_ngay || '9999-12-31';
+                    return ca.ngay >= k.tu_ngay && ca.ngay <= kEnd;
+                });
+                if (matchedKy && kyPaymentRatios[matchedKy.id]) {
+                    const r = kyPaymentRatios[matchedKy.id].ratio;
+                    gvPaidInRange += ca.don_gia * r;
+                }
+            });
+
+            gvPaidInRange = Math.round(gvPaidInRange);
+            const conLai = Math.max(0, g.tong_tien - gvPaidInRange);
+            let trang_thai_thanh_toan = 'chua_thanh_toan';
+            if (conLai === 0 && gvPaidInRange > 0) {
+                trang_thai_thanh_toan = 'da_thanh_toan';
+            } else if (gvPaidInRange > 0) {
+                trang_thai_thanh_toan = 'thanh_toan_mot_phan';
+            }
+
+            return {
+                ...g,
+                da_thanh_toan: gvPaidInRange,
+                con_lai: conLai,
+                trang_thai_thanh_toan
+            };
+        });
+
+        const totTienPhatSinh = calc.totTien;
+        const totDaThanhToan = gvListWithRatio.reduce((s, g) => s + g.da_thanh_toan, 0);
+        const totConLai = Math.max(0, totTienPhatSinh - totDaThanhToan);
+
+        const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
+        const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
+
+        return res.json({
+            ok: true,
+            data: gvListWithRatio,
+            summary: {
+                tong_so_gv: gvListWithRatio.length,
+                totCaAn: calc.totCaAn,
+                totCaNgu: calc.totCaNgu,
+                totTienPhatSinh,
+                totDaThanhToan,
+                totConLai,
+                effectiveEnd,
+                today: todayVN
+            },
+            kyList: kyInfoList,
+            ghi_chu_cach_tinh: 'Tiền trực phát sinh tính theo từng ca trực diễn ra trong khoảng ngày được chọn. "Đã thanh toán" là số tiền đã chi trả phân bổ theo tỷ lệ thanh toán của kỳ chứa các ca trực đó.',
+            don_gia_an: calc.don_gia_an,
+            don_gia_ngu: calc.don_gia_ngu,
+            quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
+            ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
 /** GET /api/baocao/full/ */

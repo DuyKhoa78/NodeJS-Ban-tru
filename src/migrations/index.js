@@ -194,6 +194,61 @@ const migrations = [
         console.warn('Migration 20260928_add_performance_indexes warning:', err.message);
       });
     }
+  },
+  {
+    id: '20260929_add_kytrucgv_and_thanhtoan_luonggv',
+    async up(sequelize) {
+      await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS "core_kytrucgv" (
+          "id" SERIAL PRIMARY KEY,
+          "ten_ky" VARCHAR(255) NOT NULL,
+          "tu_ngay" DATE NOT NULL,
+          "den_ngay" DATE,
+          "trang_thai" VARCHAR(20) NOT NULL DEFAULT 'dang_dien_ra',
+          "ngay_chot" TIMESTAMPTZ,
+          "nguoi_chot_id" INTEGER REFERENCES "accounts_staffuser"("id") ON DELETE SET NULL,
+          "nguoi_chot_ten" VARCHAR(255),
+          "tong_so_gv" INTEGER DEFAULT 0,
+          "tong_ca_an" INTEGER DEFAULT 0,
+          "tong_ca_ngu" INTEGER DEFAULT 0,
+          "tong_tien" NUMERIC(15, 2) DEFAULT 0,
+          "ghi_chu" TEXT,
+          "nam_hoc" VARCHAR(20) DEFAULT '2026-2027',
+          "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS "idx_kytrucgv_dates" ON "core_kytrucgv" ("tu_ngay", "den_ngay");
+        CREATE INDEX IF NOT EXISTS "idx_kytrucgv_trangthai" ON "core_kytrucgv" ("trang_thai");
+
+        CREATE TABLE IF NOT EXISTS "core_thanhtoan_luonggv" (
+          "id" SERIAL PRIMARY KEY,
+          "ky_truc_id" INTEGER NOT NULL REFERENCES "core_kytrucgv"("id") ON DELETE CASCADE,
+          "ma_gv_id" INTEGER REFERENCES "quanli_giaovien"("id") ON DELETE SET NULL,
+          "ten_gv" VARCHAR(255) NOT NULL,
+          "so_tien" NUMERIC(15, 2) NOT NULL,
+          "ngay_thanh_toan" DATE NOT NULL DEFAULT CURRENT_DATE,
+          "hinh_thuc" VARCHAR(50) DEFAULT 'chuyen_khoan',
+          "nguoi_thao_tac_id" INTEGER REFERENCES "accounts_staffuser"("id") ON DELETE SET NULL,
+          "nguoi_thao_tac_ten" VARCHAR(255),
+          "ghi_chu" TEXT,
+          "trang_thai" VARCHAR(20) NOT NULL DEFAULT 'thanh_cong',
+          "ly_do_huy" TEXT,
+          "ngay_huy" TIMESTAMPTZ,
+          "nguoi_huy_ten" VARCHAR(255),
+          "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS "idx_thanhtoan_ky" ON "core_thanhtoan_luonggv" ("ky_truc_id");
+        CREATE INDEX IF NOT EXISTS "idx_thanhtoan_gv" ON "core_thanhtoan_luonggv" ("ma_gv_id");
+        CREATE INDEX IF NOT EXISTS "idx_thanhtoan_trangthai" ON "core_thanhtoan_luonggv" ("trang_thai");
+
+        INSERT INTO "core_kytrucgv" ("ten_ky", "tu_ngay", "den_ngay", "trang_thai", "nam_hoc", "created_at", "updated_at")
+        SELECT 'Kỳ 1', '2026-09-07', NULL, 'dang_dien_ra', '2026-2027', NOW(), NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM "core_kytrucgv");
+      `).catch(err => {
+        console.warn('Migration 20260929_add_kytrucgv_and_thanhtoan_luonggv warning:', err.message);
+      });
+    }
   }
 ];
 
