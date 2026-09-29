@@ -3329,9 +3329,8 @@ router.get('/api/baocao/suat-an-thang/', loginRequired, async (req, res) => {
             order: [['lop', 'ASC'], ['ho_ten', 'ASC']],
         });
 
-        // Chỉ xét những học sinh có đăng ký ăn bán trú (có ma_phong_an_id hoặc nếu không phân phòng ăn thì tất cả hs bán trú)
-        const hasAnyPhongAn = hsList.some(h => h.ma_phong_an_id);
-        const lunchStudents = hasAnyPhongAn ? hsList.filter(h => h.ma_phong_an_id) : hsList;
+        // Chỉ xét những học sinh có đăng ký ăn bán trú (có phòng ăn hoặc học sinh đã rút bán trú trong kỳ)
+        const lunchStudents = hsList.filter(h => h.ma_phong_an_id || h.ngay_rut);
         const lunchHsIds = lunchStudents.map(h => h.id);
 
         // 3. Lấy bản ghi điểm danh ăn trong khoảng [start, end]
