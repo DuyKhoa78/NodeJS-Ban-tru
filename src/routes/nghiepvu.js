@@ -3460,9 +3460,8 @@ router.get('/api/baocao/luong-gv/', loginRequired, roleRequired('admin', 'quan_l
         // Lấy ngày hiện tại theo giờ Việt Nam
         const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
-        // Giới hạn tính toán: Chỉ tính công thực tế đến thời điểm hiện tại (ngay <= todayVN),
-        // các ngày tương lai/chưa tới không được tự động gán công vào
-        const effectiveEnd = end > todayVN ? todayVN : end;
+        // Tính toán trọn vẹn chu kỳ tháng thanh toán cho giáo viên
+        const effectiveEnd = end;
 
         let phanCong = [];
         if (start <= effectiveEnd) {
