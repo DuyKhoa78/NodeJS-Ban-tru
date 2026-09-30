@@ -418,18 +418,21 @@ async function checkAndAutoRescueRooms(targetNgay) {
                         continue;
                     }
 
+                    // Nếu học sinh đã có trạng thái điểm danh trước đó (khác null và undefined), giữ nguyên, KHÔNG ghi đè dữ liệu hoặc ghi chú!
+                    if (ex && ex[fieldStatus] !== null && ex[fieldStatus] !== undefined) {
+                        continue;
+                    }
+
                     let finalStatus = 1; // Mặc định Vắng nếu không chốt và chưa quét
                     let phuongThuc = 'auto_he_thong_lay_ve';
                     let thoiGian = new Date();
+                    let ghiChu = null;
 
-                    if (dr && dr.status !== undefined) {
+                    if (dr && dr.status !== undefined && dr.status !== null) {
                         finalStatus = dr.status;
                         phuongThuc = dr.phuong_thuc || 'qr';
                         thoiGian = dr.time || dr.scanned_at || new Date();
-                    } else if (ex && ex[fieldStatus] !== null && ex[fieldStatus] !== undefined) {
-                        finalStatus = ex[fieldStatus];
-                        phuongThuc = ex[fieldPhuongThuc] || 'thu_cong';
-                        thoiGian = ex[fieldThoiGian] || new Date();
+                        ghiChu = dr.ghi_chu || null;
                     }
 
                     allRecordsToSave.push({
@@ -439,7 +442,7 @@ async function checkAndAutoRescueRooms(targetNgay) {
                         [fieldStatus]: finalStatus,
                         [fieldPhuongThuc]: phuongThuc,
                         [fieldThoiGian]: thoiGian,
-                        ghi_chu: 'Hệ thống tự động thu thập (GV không chốt sổ)'
+                        ghi_chu: ghiChu
                     });
                 }
 
@@ -785,21 +788,62 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 fallbackMap[h.id] = loai === 'an' ? h.ma_phong_an_id : h.ma_phong_ngu_id;
             });
 
-            const data = records.map(r => ({
+            // Chỉ lưu những học sinh có trạng thái cụ thể (0: Có mặt, 1: Vắng, 2: Phép)
+            // Nếu r.status là null hoặc undefined (chưa chọn) thì không cập nhật để giữ trống
+            const validRecords = records.filter(r => r.status !== null && r.status !== undefined);
+            if (validRecords.length === 0) {
+                await t.rollback();
+                return res.json({ ok: true, message: 'Không có bản ghi điểm danh nào cần cập nhật' });
+            }
+
+            // Quy định: Giáo viên khi điểm danh không được ghi phép (chỉ có Admin/Học vụ mới có quyền báo phép)
+            if (req.user.role === 'giao_vien') {
+                const existingPhepList = await DiemDanhHS.findAll({
+                    where: {
+                        ma_hs_id: { [Op.in]: validRecords.map(r => r.ma_hs) },
+                        ngay: reqNgay,
+                        [field]: 2
+                    },
+                    attributes: ['ma_hs_id'],
+                    transaction: t
+                });
+                const phepSet = new Set(existingPhepList.map(p => p.ma_hs_id));
+
+                for (const r of validRecords) {
+                    if (r.status === 2 && !phepSet.has(r.ma_hs)) {
+                        await t.rollback();
+                        return res.status(403).json({
+                            ok: false,
+                            error: 'Giáo viên không có quyền ghi phép cho học sinh khi điểm danh. Thao tác báo nghỉ phép do Ban quản lý/Admin phụ trách.'
+                        });
+                    }
+                    // Nếu học sinh đã có phép do Admin duyệt trước đó, giáo viên không thể thay đổi
+                    if (phepSet.has(r.ma_hs) && r.status !== 2) {
+                        r.status = 2;
+                    }
+                }
+            }
+
+            const data = validRecords.map(r => ({
                 ma_hs_id: r.ma_hs,
                 ngay: r.ngay,
                 [field]: r.status,
                 [fieldPhong]: r.ma_phong || lsMap[r.ma_hs] || fallbackMap[r.ma_hs] || null,
                 [oppositeField]: null,
-                ghi_chu: r.ghi_chu || null
+                ...(r.ghi_chu ? { ghi_chu: r.ghi_chu } : {})
             }));
 
+            const updateFields = [field, fieldPhong];
+            if (validRecords.some(r => r.ghi_chu)) {
+                updateFields.push('ghi_chu');
+            }
+
             await DiemDanhHS.bulkCreate(data, {
-                updateOnDuplicate: [field, 'ghi_chu', fieldPhong],
+                updateOnDuplicate: updateFields,
                 transaction: t
             });
             await t.commit();
-            return res.json({ ok: true, message: `Đã lưu ${records.length} bản ghi điểm danh` });
+            return res.json({ ok: true, message: `Đã lưu ${validRecords.length} bản ghi điểm danh` });
         } catch (e) { await t.rollback(); throw e; }
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
 });
@@ -1368,7 +1412,25 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
             }
         }
 
-        const cleanList = Array.isArray(danh_sach_hs) ? danh_sach_hs : [];
+        let cleanList = Array.isArray(danh_sach_hs) ? danh_sach_hs : [];
+        if (req.user.role === 'giao_vien') {
+            const fieldStatus = loaiTrucNum === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
+            const hsPhep = await DiemDanhHS.findAll({
+                where: {
+                    ma_hs_id: { [Op.in]: cleanList.filter(item => item.status === 2).map(item => item.id) },
+                    ngay,
+                    [fieldStatus]: 2
+                },
+                attributes: ['ma_hs_id']
+            });
+            const phepSet = new Set(hsPhep.map(p => p.ma_hs_id));
+            cleanList = cleanList.map(item => {
+                if (item.status === 2 && !phepSet.has(item.id)) {
+                    return { ...item, status: 1 };
+                }
+                return item;
+            });
+        }
 
         await DiemDanhDraft.upsert({
             ngay,
@@ -1585,7 +1647,11 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                     phuongThuc = ex[fieldPhuongThuc] || 'phep';
                     thoiGian = ex[fieldThoiGian] || new Date();
                 } else if (sc) {
-                    finalStatus = sc.status; // 0=Có mặt, 1=Vắng, 2=Phép
+                    if (req.user.role === 'giao_vien' && sc.status === 2) {
+                        finalStatus = 1; // Giáo viên không được tự gán phép nếu chưa được Admin duyệt phép từ trước
+                    } else {
+                        finalStatus = sc.status; // 0=Có mặt, 1=Vắng, 2=Phép
+                    }
                     phuongThuc = sc.phuong_thuc || 'qr';
                     thoiGian = sc.time || new Date();
                 }
