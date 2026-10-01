@@ -238,16 +238,16 @@ router.get('/api/hocsinh/:loai', loginRequired, roleRequired('admin', 'hoc_vu', 
                 if (loai === 'an' && !hs.phong_an) return false;
                 if (loai === 'ngu' && !hs.phong_ngu) return false;
                 if (hs.ngay_vao && hs.ngay_vao > d) return false;
-                if (hs.ngay_rut && hs.ngay_rut < d) return false;
-                if (!hs.ngay_rut && !hs.dang_hoc) return false;
+                if (hs.ngay_rut && hs.ngay_rut <= d) return false;
+                if (!hs.dang_hoc && (!hs.ngay_rut || hs.ngay_rut <= d)) return false;
                 return true;
             });
         } else {
             filtered = loai === 'an'
-                ? data.filter(hs => hs.phong_an)
+                ? data.filter(hs => hs.phong_an && hs.dang_hoc !== false)
                 : loai === 'ngu'
-                    ? data.filter(hs => hs.phong_ngu)
-                    : data;
+                    ? data.filter(hs => hs.phong_ngu && hs.dang_hoc !== false)
+                    : data.filter(hs => hs.dang_hoc !== false);
         }
 
         if (req.query.active_only === 'true' || req.query.dang_hoc === 'true' || req.query.active === 'true' || req.query.active === '1') {
@@ -374,7 +374,7 @@ async function checkAndAutoRescueRooms(targetNgay) {
                     [fieldPhong]: { [Op.in]: uncompletedRooms },
                     [Op.or]: [
                         { dang_hoc: true },
-                        { ngay_rut: { [Op.gte]: targetNgay } }
+                        { ngay_rut: { [Op.gt]: targetNgay } }
                     ]
                 }
             });
@@ -914,8 +914,8 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
                 for (const d of dates) {
                     // Bỏ qua học sinh đã rút bán trú hoặc chưa vào học
                     if (hsInfo) {
-                        if (hsInfo.dang_hoc === false && (!hsInfo.ngay_rut || d > hsInfo.ngay_rut)) continue;
-                        if (hsInfo.ngay_rut && d > hsInfo.ngay_rut) continue;
+                        if (hsInfo.dang_hoc === false && (!hsInfo.ngay_rut || d >= hsInfo.ngay_rut)) continue;
+                        if (hsInfo.ngay_rut && d >= hsInfo.ngay_rut) continue;
                         if (hsInfo.ngay_vao && d < hsInfo.ngay_vao) continue;
                     }
                     const key = `${ma_hs}_${d}`;
@@ -1583,7 +1583,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 [fieldPhong]: ma_phong_id,
                 [Op.or]: [
                     { dang_hoc: true },
-                    { ngay_rut: { [Op.gte]: ngay } }
+                    { ngay_rut: { [Op.gt]: ngay } }
                 ]
             },
             attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'dang_hoc', 'ngay_vao', 'ngay_rut']
@@ -1604,7 +1604,8 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         // Lọc học sinh thực tế phải tham gia trong ngày (loại trừ ngày nghỉ/miễn theo CauHinhNgay và HS chưa vào/đã rút)
         const validStudents = allStudents.filter(hs => {
             if (hs.ngay_vao && hs.ngay_vao > ngay) return false;
-            if (hs.ngay_rut && hs.ngay_rut < ngay) return false;
+            if (hs.ngay_rut && hs.ngay_rut <= ngay) return false;
+            if (!hs.dang_hoc && (!hs.ngay_rut || hs.ngay_rut <= ngay)) return false;
             return isHsAllowed(hs, cauhinhNgay);
         });
 
@@ -2765,7 +2766,8 @@ router.get('/api/baocao/hs-vang-ngay/', loginRequired, async (req, res) => {
         const hsIds = [];
         hsList.forEach(h => {
             if (h.ngay_vao && targetDate < h.ngay_vao) return;
-            if (h.ngay_rut && targetDate > h.ngay_rut) return;
+            if (h.ngay_rut && targetDate >= h.ngay_rut) return;
+            if (h.dang_hoc === false && (!h.ngay_rut || targetDate >= h.ngay_rut)) return;
             hsMap[h.id] = h;
             hsIds.push(h.id);
         });
@@ -3229,12 +3231,14 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, roleRequired('admin', 'qu
             // Số ngày HS phải tham gia: nằm trong khoảng [hs.ngay_vao, hs.ngay_rut] VÀ được phép theo ngày đặc biệt
             const phaiAn = ngayAn.filter(ngay => {
                 if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
-                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                if (hs.ngay_rut && ngay >= hs.ngay_rut) return false;
+                if (hs.dang_hoc === false && (!hs.ngay_rut || ngay >= hs.ngay_rut)) return false;
                 return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
             });
             const phaiNgu = ngayNgu.filter(ngay => {
                 if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
-                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                if (hs.ngay_rut && ngay >= hs.ngay_rut) return false;
+                if (hs.dang_hoc === false && (!hs.ngay_rut || ngay >= hs.ngay_rut)) return false;
                 return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
             });
 
@@ -3435,7 +3439,8 @@ router.get('/api/baocao/suat-an-thang/', loginRequired, async (req, res) => {
             const cfg = cauhinhNgayMap[ngayStr] || null;
             const validHs = lunchStudents.filter(hs => {
                 if (hs.ngay_vao && ngayStr < hs.ngay_vao) return false;
-                if (hs.ngay_rut && ngayStr > hs.ngay_rut) return false;
+                if (hs.ngay_rut && ngayStr >= hs.ngay_rut) return false;
+                if (hs.dang_hoc === false && (!hs.ngay_rut || ngayStr >= hs.ngay_rut)) return false;
                 return isHsAllowed(hs, cfg);
             });
 
@@ -5409,17 +5414,18 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                     [fieldPhong]: { [Op.in]: roomCodes },
                     [Op.or]: [
                         { dang_hoc: true },
-                        { ngay_rut: { [Op.gte]: targetNgay } }
+                        { ngay_rut: { [Op.gt]: targetNgay } }
                     ]
                 },
-                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'ngay_vao', 'ngay_rut', fieldPhong],
+                attributes: ['id', 'ho_ten', 'lop', 'gioi_tinh', 'dang_hoc', 'ngay_vao', 'ngay_rut', fieldPhong],
                 order: [['lop', 'ASC'], ['ho_ten', 'ASC']]
             });
 
             // Lọc chính xác học sinh tham gia tại ngày targetNgay
             const students = allStudents.filter(s => {
                 if (s.ngay_vao && s.ngay_vao > targetNgay) return false;
-                if (s.ngay_rut && s.ngay_rut < targetNgay) return false;
+                if (s.ngay_rut && s.ngay_rut <= targetNgay) return false;
+                if (!s.dang_hoc && (!s.ngay_rut || s.ngay_rut <= targetNgay)) return false;
                 return true;
             });
 
@@ -5976,7 +5982,8 @@ router.get('/api/taichinh/so-thu-tien/', loginRequired, roleRequired('admin', 'q
             // Tính số ngày phải ăn theo lịch
             const phaiAn = ngayAn.filter(ngay => {
                 if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
-                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                if (hs.ngay_rut && ngay >= hs.ngay_rut) return false;
+                if (hs.dang_hoc === false && (!hs.ngay_rut || ngay >= hs.ngay_rut)) return false;
                 return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
             });
 
@@ -6295,7 +6302,8 @@ router.post('/api/taichinh/dong-bo-phai-thu/', loginRequired, roleRequired('admi
             const recs = ddMap[hs.id] || {};
             const phaiAn = ngayAn.filter(ngay => {
                 if (hs.ngay_vao && ngay < hs.ngay_vao) return false;
-                if (hs.ngay_rut && ngay > hs.ngay_rut) return false;
+                if (hs.ngay_rut && ngay >= hs.ngay_rut) return false;
+                if (hs.dang_hoc === false && (!hs.ngay_rut || ngay >= hs.ngay_rut)) return false;
                 return isHsAllowed(hs, cauhinhNgayMap[ngay] || null);
             });
 

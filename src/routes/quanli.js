@@ -8,7 +8,8 @@ const { Op } = require('sequelize');
 const {
   HocSinh, GiaoVien, Phong, MuaVatDung, PhanBoVatDung,
   CauHinhGia, CauHinhHeThong, PhanCongTrucGV, StaffUser, sequelize, LichSuThaoTac,
-  LichSuPhanPhong, DiemDanhDraft, DiemDanhPhong, LichTrucCoDinh, CauHinhDotThanhToan
+  LichSuPhanPhong, DiemDanhDraft, DiemDanhPhong, LichTrucCoDinh, CauHinhDotThanhToan,
+  DiemDanhHS
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const { invalidateStaticCaches } = require('../utils/appCache');
@@ -246,10 +247,14 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
       finalNgayVao = getDefaultNgayVaoVN();
     }
 
+    // Khi học sinh rút bán trú: tự động xóa phòng ăn và phòng ngủ
+    const effectivePhongAn = finalDangHoc ? (ma_phong_an || null) : null;
+    const effectivePhongNgu = finalDangHoc ? (ma_phong_ngu || null) : null;
+
     const data = {
       ho_ten, lop, gioi_tinh: parseInt(gioi_tinh),
-      ma_phong_an_id: ma_phong_an || null,
-      ma_phong_ngu_id: ma_phong_ngu || null,
+      ma_phong_an_id: effectivePhongAn,
+      ma_phong_ngu_id: effectivePhongNgu,
       dang_hoc: finalDangHoc,
       ngay_vao: finalNgayVao,
       ngay_rut: finalNgayRut,
@@ -298,6 +303,19 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
       }
 
       await HocSinh.update(data, { where: { id } });
+
+      // Nếu học sinh đã rút bán trú tính đến hôm nay, dọn dẹp điểm danh và draft từ ngày rút trở đi
+      if (!finalDangHoc && finalNgayRut && finalNgayRut <= todayStr) {
+        await DiemDanhHS.destroy({ where: { ma_hs_id: id, ngay: { [Op.gte]: finalNgayRut } } });
+        const affectedDrafts = await DiemDanhDraft.findAll({ where: { ngay: { [Op.gte]: finalNgayRut } } });
+        for (const draft of affectedDrafts) {
+          if (Array.isArray(draft.danh_sach_hs) && draft.danh_sach_hs.some(s => s.id === id)) {
+            draft.danh_sach_hs = draft.danh_sach_hs.filter(s => s.id !== id);
+            await draft.save();
+          }
+        }
+      }
+
       invalidateStaticCaches();
       return res.json({ ok: true, message: 'Cập nhật học sinh thành công' });
     } else {
