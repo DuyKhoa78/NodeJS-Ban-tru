@@ -247,14 +247,10 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
       finalNgayVao = getDefaultNgayVaoVN();
     }
 
-    // Khi học sinh rút bán trú: tự động xóa phòng ăn và phòng ngủ
-    const effectivePhongAn = finalDangHoc ? (ma_phong_an || null) : null;
-    const effectivePhongNgu = finalDangHoc ? (ma_phong_ngu || null) : null;
-
     const data = {
       ho_ten, lop, gioi_tinh: parseInt(gioi_tinh),
-      ma_phong_an_id: effectivePhongAn,
-      ma_phong_ngu_id: effectivePhongNgu,
+      ma_phong_an_id: ma_phong_an || null,
+      ma_phong_ngu_id: ma_phong_ngu || null,
       dang_hoc: finalDangHoc,
       ngay_vao: finalNgayVao,
       ngay_rut: finalNgayRut,
@@ -304,8 +300,9 @@ router.post('/api/hocsinh/save/', loginRequired, roleRequired('admin'), async (r
 
       await HocSinh.update(data, { where: { id } });
 
-      // Nếu học sinh đã rút bán trú tính đến hôm nay, dọn dẹp điểm danh và draft từ ngày rút trở đi
-      if (!finalDangHoc && finalNgayRut && finalNgayRut <= todayStr) {
+      // Nếu học sinh đã rút bán trú từ mốc finalNgayRut: dọn dẹp draft và điểm danh từ ngày rút trở đi (ngay >= finalNgayRut)
+      // Toàn bộ dữ liệu trước ngày rút (ngay < finalNgayRut) được bảo toàn nguyên vẹn để tính tiền
+      if (!finalDangHoc && finalNgayRut) {
         await DiemDanhHS.destroy({ where: { ma_hs_id: id, ngay: { [Op.gte]: finalNgayRut } } });
         const affectedDrafts = await DiemDanhDraft.findAll({ where: { ngay: { [Op.gte]: finalNgayRut } } });
         for (const draft of affectedDrafts) {
