@@ -4249,8 +4249,12 @@ router.get('/api/baocao/thong-ke-luong-gv/', loginRequired, roleRequired('admin'
 
         return res.json({
             ok: true,
+            tu_ngay,
+            den_ngay: effectiveEnd,
             data: gvListWithRatio,
             summary: {
+                tu_ngay,
+                den_ngay: effectiveEnd,
                 tong_so_gv: gvListWithRatio.length,
                 totCaAn: calc.totCaAn,
                 totCaNgu: calc.totCaNgu,
