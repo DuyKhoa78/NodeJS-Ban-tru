@@ -57,6 +57,24 @@ function getTeacherActiveDutyCondition(gvId) {
     };
 }
 
+/** Tìm gvId cho tài khoản (dành cho Giáo viên hoặc Học vụ) */
+async function resolveGvIdForUser(user) {
+    if (!user) return null;
+    let gvId = user.giao_vien_id;
+    if (!gvId) {
+        const gvObj = await GiaoVien.findOne({
+            where: {
+                [Op.or]: [
+                    { ho_ten: user.username },
+                    { ho_ten: user.fullname }
+                ]
+            }
+        });
+        if (gvObj) gvId = gvObj.id;
+    }
+    return gvId || null;
+}
+
 /** ─── WEEK CONFIG ─── */
 
 /** GET /api/lichtruc/config-tuan/?tuan= */
@@ -488,10 +506,10 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
         const { ngay, loai } = req.query;
         const ngayFilter = ngay || new Date().toISOString().split('T')[0];
 
-        // Auto-rescue chỉ chạy khi GV truy cập (cứu dữ liệu nháp nếu GV quên chốt).
-        // Admin/Học vụ tự điểm danh tay → KHÔNG chạy auto-rescue (tránh tự động ghi vắng tất cả).
-        const isAdminOrHocVu = req.user.is_admin || req.user.is_superuser || req.user.role === 'hoc_vu' || req.user.role === 'admin';
-        if (!isAdminOrHocVu) {
+        // Auto-rescue chỉ chạy khi nhân sự trực (GV/Học vụ) truy cập
+        // Admin tự thao tác tay → KHÔNG chạy auto-rescue
+        const isAdmin = req.user.is_admin || req.user.is_superuser || req.user.role === 'admin';
+        if (!isAdmin) {
             await checkAndAutoRescueRooms(ngayFilter);
         }
 
@@ -535,21 +553,17 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
             };
         });
 
-        // Nếu là giáo viên, xác định phòng được phân công
+        // Nếu là giáo viên hoặc học vụ, xác định phòng được phân công
         let assignedRooms = null;
         let myAssignments = null;
-        if (req.user.role === 'giao_vien') {
-            let gvId = req.user.giao_vien_id;
-            if (!gvId) {
-                const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-                if (gvObj) gvId = gvObj.id;
-            }
+        if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
+            const gvId = await resolveGvIdForUser(req.user);
             if (gvId) {
                 myAssignments = await PhanCongTrucGV.findAll({
                     where: {
                         ngay: ngayFilter,
                         loai_truc: loaiTrucQuery,
-                        [Op.or]: [{ ma_gv_id: gvId }, { ma_gv_truc_thay_id: gvId }]
+                        ...getTeacherActiveDutyCondition(gvId)
                     }
                 });
                 assignedRooms = myAssignments.map(a => a.ma_phong_id);
@@ -705,49 +719,56 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
         if (!isSpecialAdmin) {
             const vn = getVietnamTime();
 
-            if (req.user.role === 'giao_vien') {
-                // Giáo viên được phép lưu điểm danh trên các ngày được phân công trực
-                let gvId = req.user.giao_vien_id;
-                if (!gvId) {
-                    const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-                    if (gvObj) gvId = gvObj.id;
-                }
-                const pcCount = await PhanCongTrucGV.count({
+            if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
+                const gvId = await resolveGvIdForUser(req.user);
+                const pcList = await PhanCongTrucGV.findAll({
                     where: {
                         ngay: reqNgay,
                         loai_truc: loaiPhongNum,
                         ...getTeacherActiveDutyCondition(gvId)
                     }
                 });
-                if (pcCount === 0) {
+                if (pcList.length === 0) {
                     return res.status(403).json({
                         ok: false,
-                        error: `Thầy/Cô không có lịch phân công trực ca ${loai === 'an' ? 'ăn' : 'ngủ'} trong ngày ${reqNgay}.`
+                        error: `Bạn không có lịch phân công trực ca ${loai === 'an' ? 'ăn' : 'ngủ'} trong ngày ${reqNgay}.`
                     });
                 }
-                // Chỉ mở vào đúng ngày trực và đúng khung giờ: Ăn (10h55 – 11h30), Ngủ (11h30 – 12h05)
-                if (reqNgay !== vn.todayStr) {
-                    return res.status(403).json({
-                        ok: false,
-                        error: `Theo quy định, hệ thống chỉ mở điểm danh vào đúng ngày trực (${reqNgay}) trong khung giờ ca ${loai === 'an' ? 'ăn' : 'ngủ'}.`
-                    });
+                const assignedRoomsSet = new Set(pcList.map(pc => pc.ma_phong_id));
+                for (const r of records) {
+                    if (r.ma_phong && !assignedRoomsSet.has(r.ma_phong)) {
+                        return res.status(403).json({
+                            ok: false,
+                            error: `Bạn không được phân công trực phòng ${r.ma_phong}, không thể điểm danh cho phòng này.`
+                        });
+                    }
                 }
-                const startMins = loai === 'an' ? 655 : 690;
-                const endMins = loai === 'an' ? 690 : 725;
-                const timeLabel = loai === 'an' ? '10h55 – 11h30' : '11h30 – 12h05';
-                if (vn.totalMins < startMins || vn.totalMins >= endMins) {
-                    return res.status(403).json({
-                        ok: false,
-                        error: `Khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} là từ ${timeLabel} (khóa lúc ${loai === 'an' ? '11h30' : '12h05'}). Hiện tại hệ thống đang khóa.`
-                    });
-                }
-            } else if (req.user.role === 'hoc_vu') {
-                // Học vụ chỉ được điểm danh trong khung giờ từ 11:00 đến 14:00 (660 - 840)
-                if (vn.totalMins < 660 || vn.totalMins > 840) {
-                    return res.status(400).json({
-                        ok: false,
-                        error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 11:00 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.'
-                    });
+
+                if (req.user.role === 'giao_vien') {
+                    // Chỉ mở vào đúng ngày trực và đúng khung giờ: Ăn (10h55 – 11h30), Ngủ (11h30 – 12h05)
+                    if (reqNgay !== vn.todayStr) {
+                        return res.status(403).json({
+                            ok: false,
+                            error: `Theo quy định, hệ thống chỉ mở điểm danh vào đúng ngày trực (${reqNgay}) trong khung giờ ca ${loai === 'an' ? 'ăn' : 'ngủ'}.`
+                        });
+                    }
+                    const startMins = loai === 'an' ? 655 : 690;
+                    const endMins = loai === 'an' ? 690 : 725;
+                    const timeLabel = loai === 'an' ? '10h55 – 11h30' : '11h30 – 12h05';
+                    if (vn.totalMins < startMins || vn.totalMins >= endMins) {
+                        return res.status(403).json({
+                            ok: false,
+                            error: `Khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} là từ ${timeLabel} (khóa lúc ${loai === 'an' ? '11h30' : '12h05'}). Hiện tại hệ thống đang khóa.`
+                        });
+                    }
+                } else if (req.user.role === 'hoc_vu') {
+                    // Học vụ điểm danh theo phòng phân công từ 10:55 đến 14:00
+                    if (vn.totalMins < 655 || vn.totalMins > 840) {
+                        return res.status(400).json({
+                            ok: false,
+                            error: 'Học vụ chỉ có thể thực hiện điểm danh từ lúc 10:55 đến 14:00. Ngoài khung giờ này, vui lòng liên hệ Admin.'
+                        });
+                    }
                 }
             }
         }
@@ -1070,19 +1091,15 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
         // Auto rescue nếu đã quá giờ cắt
         await checkAndAutoRescueRooms(targetNgay);
 
-        let gvId = req.user.giao_vien_id;
-        if (!gvId) {
-            const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-            if (gvObj) gvId = gvObj.id;
+        let gvId = await resolveGvIdForUser(req.user);
+
+        if (!gvId && (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu')) {
+            return res.status(404).json({ ok: false, error: 'Không tìm thấy hồ sơ giáo viên/nhân sự liên kết với tài khoản này' });
         }
 
-        if (!gvId && req.user.role === 'giao_vien') {
-            return res.status(404).json({ ok: false, error: 'Không tìm thấy hồ sơ giáo viên liên kết với tài khoản này' });
-        }
-
-        // Lấy danh sách phân công của giáo viên (chỉ lấy ca trực thực tế đảm nhiệm)
+        // Lấy danh sách phân công của giáo viên hoặc học vụ (chỉ lấy ca trực thực tế đảm nhiệm)
         let whereClause = { ngay: targetNgay };
-        if (req.user.role === 'giao_vien') {
+        if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
             whereClause[Op.and] = [
                 getTeacherActiveDutyCondition(gvId)
             ];
@@ -1379,13 +1396,9 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
 
         const loaiTrucNum = Number(loai_truc);
 
-        // Kiểm tra phân công nếu là giáo viên
-        if (req.user.role === 'giao_vien') {
-            let gvId = req.user.giao_vien_id;
-            if (!gvId) {
-                const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-                if (gvObj) gvId = gvObj.id;
-            }
+        // Kiểm tra phân công nếu là giáo viên hoặc học vụ
+        if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
+            const gvId = await resolveGvIdForUser(req.user);
             const pc = await PhanCongTrucGV.findOne({
                 where: {
                     ngay,
@@ -1395,20 +1408,22 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
                 }
             });
             if (!pc) {
-                return res.status(403).json({ ok: false, error: 'Thầy/Cô không được phân công trực phòng này trong ca đã chọn' });
+                return res.status(403).json({ ok: false, error: 'Bạn không được phân công trực phòng này trong ca đã chọn' });
             }
             if (pc.nhiem_vu !== 0) {
-                return res.status(403).json({ ok: false, error: 'Thầy/Cô có nhiệm vụ Giám sát, không có quyền điểm danh hoặc đồng bộ dữ liệu phòng này' });
+                return res.status(403).json({ ok: false, error: 'Bạn có nhiệm vụ Giám sát, không có quyền điểm danh hoặc đồng bộ dữ liệu phòng này' });
             }
-            const vn = getVietnamTime();
-            if (ngay !== vn.todayStr) {
-                return res.status(403).json({ ok: false, error: `Hệ thống chỉ mở vào đúng ngày trực (${ngay}) trong khung giờ quy định.` });
-            }
-            const startMins = loaiTrucNum === 0 ? 655 : 690;
-            const endMins = loaiTrucNum === 0 ? 690 : 725;
-            const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
-            if (vn.totalMins < startMins || vn.totalMins >= endMins) {
-                return res.status(403).json({ ok: false, error: `Khung giờ điểm danh ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
+            if (req.user.role === 'giao_vien') {
+                const vn = getVietnamTime();
+                if (ngay !== vn.todayStr) {
+                    return res.status(403).json({ ok: false, error: `Hệ thống chỉ mở vào đúng ngày trực (${ngay}) trong khung giờ quy định.` });
+                }
+                const startMins = loaiTrucNum === 0 ? 655 : 690;
+                const endMins = loaiTrucNum === 0 ? 690 : 725;
+                const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
+                if (vn.totalMins < startMins || vn.totalMins >= endMins) {
+                    return res.status(403).json({ ok: false, error: `Khung giờ điểm danh ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
+                }
             }
         }
 
@@ -1462,13 +1477,9 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
 
         const loaiTrucNum = Number(loai_truc);
 
-        // Kiểm tra phân công nếu là giáo viên (không cho phép xem bản nháp phòng người khác)
-        if (req.user.role === 'giao_vien') {
-            let gvId = req.user.giao_vien_id;
-            if (!gvId) {
-                const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-                if (gvObj) gvId = gvObj.id;
-            }
+        // Kiểm tra phân công nếu là giáo viên hoặc học vụ (không cho phép xem bản nháp phòng người khác)
+        if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
+            const gvId = await resolveGvIdForUser(req.user);
             const pc = await PhanCongTrucGV.findOne({
                 where: {
                     ngay,
@@ -1478,15 +1489,15 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
                 }
             });
             if (!pc) {
-                return res.status(403).json({ ok: false, error: 'Thầy/Cô không được phân công trực phòng này trong ca đã chọn' });
+                return res.status(403).json({ ok: false, error: 'Bạn không được phân công trực phòng này trong ca đã chọn' });
             }
             if (pc.nhiem_vu !== 0) {
-                return res.status(403).json({ ok: false, error: 'Thầy/Cô có nhiệm vụ Giám sát, không có quyền xem bản nháp điểm danh phòng này' });
+                return res.status(403).json({ ok: false, error: 'Bạn có nhiệm vụ Giám sát, không có quyền xem bản nháp điểm danh phòng này' });
             }
         }
 
-        // Auto rescue chỉ chạy cho GV (Admin tự điểm danh tay)
-        const isAdminOrHocVu2 = req.user.is_admin || req.user.is_superuser || req.user.role === 'hoc_vu' || req.user.role === 'admin';
+        // Auto rescue chỉ chạy cho GV/Học vụ (Admin tự điểm danh tay)
+        const isAdminOrHocVu2 = req.user.is_admin || req.user.is_superuser || req.user.role === 'admin';
         if (!isAdminOrHocVu2) {
             await checkAndAutoRescueRooms(ngay);
         }
@@ -1543,13 +1554,9 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             });
         }
 
-        // Nếu là giáo viên, kiểm tra phân công nhiệm vụ
-        if (req.user.role === 'giao_vien') {
-            let gvId = req.user.giao_vien_id;
-            if (!gvId) {
-                const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-                if (gvObj) gvId = gvObj.id;
-            }
+        // Nếu là giáo viên hoặc học vụ, kiểm tra phân công nhiệm vụ
+        if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
+            const gvId = await resolveGvIdForUser(req.user);
             const pc = await PhanCongTrucGV.findOne({
                 where: {
                     ngay,
@@ -1559,19 +1566,21 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 }
             });
             if (!pc) {
-                return res.status(403).json({ ok: false, error: 'Thầy/Cô không được phân công phòng này trong ca trực đã chọn.' });
+                return res.status(403).json({ ok: false, error: 'Bạn không được phân công phòng này trong ca trực đã chọn.' });
             }
             if (loaiTrucNum === 0 && pc.nhiem_vu !== 0) {
-                return res.status(403).json({ ok: false, error: 'Thầy/Cô được phân công Giám sát ca ăn, không có quyền chốt điểm danh.' });
+                return res.status(403).json({ ok: false, error: 'Bạn được phân công Giám sát ca ăn, không có quyền chốt điểm danh.' });
             }
-            if (ngay !== vn.todayStr) {
-                return res.status(403).json({ ok: false, error: `Theo quy định, hệ thống chỉ mở chốt sổ vào đúng ngày trực (${ngay}) trong khung giờ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'}.` });
-            }
-            const startMins = loaiTrucNum === 0 ? 655 : 690;
-            const endMins = loaiTrucNum === 0 ? 690 : 725;
-            const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
-            if (vn.totalMins < startMins || vn.totalMins >= endMins) {
-                return res.status(403).json({ ok: false, error: `Khung giờ chốt sổ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
+            if (req.user.role === 'giao_vien') {
+                if (ngay !== vn.todayStr) {
+                    return res.status(403).json({ ok: false, error: `Theo quy định, hệ thống chỉ mở chốt sổ vào đúng ngày trực (${ngay}) trong khung giờ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'}.` });
+                }
+                const startMins = loaiTrucNum === 0 ? 655 : 690;
+                const endMins = loaiTrucNum === 0 ? 690 : 725;
+                const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
+                if (vn.totalMins < startMins || vn.totalMins >= endMins) {
+                    return res.status(403).json({ ok: false, error: `Khung giờ chốt sổ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
+                }
             }
         }
 

@@ -52,7 +52,7 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
       return res.status(400).json({ ok: false, error: 'Role không hợp lệ' });
     }
 
-    const gvId = role === 'giao_vien' && giao_vien_id ? parseInt(giao_vien_id, 10) : null;
+    const gvId = (role === 'giao_vien' || role === 'hoc_vu') && giao_vien_id ? parseInt(giao_vien_id, 10) : null;
 
     if (id) {
       // Update
