@@ -210,14 +210,13 @@ router.get('/ky-tong-hop', ketoanViewOrAdmin, async (req, res) => {
   try {
     const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
-    // Tự động đồng bộ ngày kết thúc cho các kỳ đang diễn ra lên đến ngày hôm nay (07/10/2026)
+    // Tự động đồng bộ ngày kết thúc và ngày lập cho các kỳ đang diễn ra lên đến ngày hôm nay
     try {
       await KeToanKyTongHop.update(
-        { den_ngay: todayVN },
+        { den_ngay: todayVN, ngay_lap: todayVN },
         {
           where: {
             trang_thai: 'dang_dien_ra',
-            den_ngay: { [Op.lt]: todayVN },
           },
         }
       );
@@ -231,13 +230,23 @@ router.get('/ky-tong-hop', ketoanViewOrAdmin, async (req, res) => {
         }
       );
     } catch (dateErr) {
-      console.warn('Lỗi auto-sync den_ngay:', dateErr.message);
+      console.warn('Lỗi auto-sync den_ngay/ngay_lap:', dateErr.message);
     }
 
     const list = await KeToanKyTongHop.findAll({
       order: [['tu_ngay', 'DESC'], ['id', 'DESC']],
     });
-    return res.json({ ok: true, data: list });
+    const mapped = list.map((k) => {
+      const isDaChot = k.trang_thai === 'da_chot';
+      const ngayLap = isDaChot
+        ? (k.den_ngay || (k.ngay_chot ? String(k.ngay_chot).substring(0, 10) : todayVN))
+        : todayVN;
+      return {
+        ...k.toJSON(),
+        ngay_lap: ngayLap,
+      };
+    });
+    return res.json({ ok: true, data: mapped });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -388,8 +397,8 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
     // Tính toán tức thì trong RAM (chỉ 2 câu SELECT thay vì 270 câu UPDATE qua mạng)
     if (ky.trang_thai !== 'da_chot') {
       const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
-      if (ky.den_ngay < todayVN) {
-        await ky.update({ den_ngay: todayVN });
+      if (ky.den_ngay < todayVN || ky.ngay_lap !== todayVN) {
+        await ky.update({ den_ngay: todayVN, ngay_lap: todayVN });
       }
 
       const { sortedStaff } = await fetchAttendanceSourceData(ky.tu_ngay, ky.den_ngay);
@@ -646,10 +655,20 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
     const grandTotal = rows.reduce((s, r) => s + r.tong_tien, 0);
     const grandPaid = rows.reduce((s, r) => s + r.da_thanh_toan, 0);
 
+    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+    const isDaChot = ky.trang_thai === 'da_chot';
+    const computedNgayLap = isDaChot
+      ? (ky.den_ngay || (ky.ngay_chot ? String(ky.ngay_chot).substring(0, 10) : todayVN))
+      : todayVN;
+    const kyPayload = {
+      ...ky.toJSON(),
+      ngay_lap: computedNgayLap,
+    };
+
     return res.json({
       ok: true,
       data: {
-        ky,
+        ky: kyPayload,
         columns: danhMucColumns,
         rows,
         columnTotals,
@@ -1450,6 +1469,9 @@ router.put('/ky-tong-hop/:id/nguoi-nhan/:nguoiNhanId', ketoanOrAdmin, async (req
   try {
     const ky = await KeToanKyTongHop.findByPk(req.params.id);
     if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
+    if (ky.trang_thai === 'da_chot') {
+      return res.status(400).json({ ok: false, error: 'Kỳ đã chốt sổ, không thể chỉnh sửa số tài khoản hay ghi chú' });
+    }
 
     let nn = null;
     const reqNnId = parseInt(req.params.nguoiNhanId, 10);
@@ -2041,6 +2063,7 @@ const handleChotKy = async (req, res) => {
     await ky.update({
       trang_thai: 'da_chot',
       ngay_chot: new Date(),
+      ngay_lap: denNgayChot, // Ngày lập là ngày cuối cùng của kỳ chốt sổ
       nguoi_chot_id: user.id || null,
       nguoi_chot_ten: user.fullname || user.username || 'Kế toán',
       tong_so_nguoi: sortedStaff.length,
@@ -2138,58 +2161,10 @@ router.post('/ky-tong-hop/:id/chot', ketoanOrAdmin, handleChotKy);
 
 // POST /api/ketoan/ky-tong-hop/:id/mo-lai & /mo-lai-ky
 const handleMoLaiKy = async (req, res) => {
-  try {
-    const ky = await KeToanKyTongHop.findByPk(req.params.id);
-    if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
-    if (ky.trang_thai !== 'da_chot') {
-      return res.status(400).json({ ok: false, error: 'Kỳ này chưa bị khóa chốt' });
-    }
-
-    const { ly_do } = req.body;
-    const note = ly_do && ly_do.trim() ? ly_do.trim() : 'Mở lại kỳ để chỉnh sửa số liệu';
-
-    await ky.update({
-      trang_thai: 'dang_dien_ra',
-      ngay_chot: null,
-      nguoi_chot_id: null,
-      nguoi_chot_ten: null,
-      ghi_chu: ky.ghi_chu ? `${ky.ghi_chu}\n[Mở lại: ${note}]` : `[Mở lại: ${note}]`,
-    });
-
-    // ĐỒNG BỘ MỞ LẠI KỲ TRỰC PHẦN BÁO CÁO (KyTrucGV)
-    try {
-      const kyTruc = await KyTrucGV.findOne({
-        where: {
-          [Op.or]: [
-            { tu_ngay: ky.tu_ngay },
-            { id: ky.id },
-          ],
-        },
-        order: [['id', 'DESC']],
-      });
-      if (kyTruc) {
-        await kyTruc.update({
-          trang_thai: 'dang_dien_ra',
-          ngay_chot: null,
-          nguoi_chot_id: null,
-          nguoi_chot_ten: null,
-        });
-      }
-    } catch (syncErr) {
-      console.warn('Lỗi đồng bộ mở lại KyTrucGV:', syncErr.message);
-    }
-
-    await logThietLap('MO_LAI_KY', `Mở lại kỳ tổng hợp "${ky.ten_ky}" sang trạng thái Đang diễn ra. Lý do: ${note}`, req);
-
-    return res.json({
-      ok: true,
-      message: 'Đã mở lại kỳ tổng hợp thành công và đồng bộ với phần Báo cáo.',
-      data: ky,
-    });
-  } catch (err) {
-    console.error('Lỗi mở lại kỳ:', err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
+  return res.status(400).json({
+    ok: false,
+    error: 'Kỳ đã chốt sổ, quy chế kế toán không cho phép mở lại hay chỉnh sửa số liệu.',
+  });
 };
 
 router.post('/ky-tong-hop/:id/mo-lai-ky', ketoanOrAdmin, handleMoLaiKy);
@@ -2590,10 +2565,20 @@ router.get('/ky-tong-hop/:id/export-excel', ketoanOrAdmin, async (req, res) => {
 
     // 6. Chữ ký chuẩn theo mẫu: Người lập (trái) - GIÁM ĐỐC (phải)
     ws.addRow([]);
-    const today = new Date();
-    const dayStr = String(today.getDate()).padStart(2, '0');
-    const monthStr = String(today.getMonth() + 1).padStart(2, '0');
-    const yearStr = today.getFullYear();
+    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+    const isDaChot = ky.trang_thai === 'da_chot';
+    const targetDateStr = isDaChot
+      ? (ky.den_ngay || (ky.ngay_chot ? String(ky.ngay_chot).substring(0, 10) : todayVN))
+      : todayVN;
+    let dayStr = '08', monthStr = '10', yearStr = '2026';
+    if (targetDateStr) {
+      const parts = targetDateStr.split('-');
+      if (parts.length === 3) {
+        yearStr = parts[0];
+        monthStr = parts[1];
+        dayStr = parts[2];
+      }
+    }
     const dateStr = `Thành phố Hồ Chí Minh, Ngày ${dayStr} tháng ${monthStr} năm ${yearStr}`;
 
     const dateRowValues = new Array(totalColCount).fill('');
