@@ -6,7 +6,8 @@ const NodeCache = require('node-cache');
 const {
     HocSinh, GiaoVien, Phong, DiemDanhHS, DiemDanhPhong, DiemDanhDraft,
     PhanCongTrucGV, LichTrucCoDinh, CauHinhGia, CauHinhHeThong, StaffUser, sequelize, CauHinhTuan, CauHinhNgay,
-    BaoCaoTruc, LichSuPhanPhong, CauHinhDotThanhToan, ThuTienBanTru, KyTrucGV, ThanhToanLuongGV, LichSuThaoTac
+    BaoCaoTruc, LichSuPhanPhong, CauHinhDotThanhToan, ThuTienBanTru, KyTrucGV, ThanhToanLuongGV, LichSuThaoTac,
+    KeToanKyTongHop
 } = require('../models');
 const { loginRequired, attachUser, roleRequired } = require('../middleware/auth');
 const {
@@ -1972,7 +1973,7 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
             }));
         }
         if (!cauhinh) {
-            tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
+            tasks.push(CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Vũ Quốc Phong', ten_truong: 'LÊ THỊ HỒNG GẤM' } }).then(([ch]) => {
                 const plain = ch.toJSON();
                 appCache.set('cauhinh_hethong', plain);
                 return plain;
@@ -2009,7 +2010,7 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
             gv_list: gv_list || appCache.get('gv_active_list') || [],
             phong_list,
             nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2026-2027',
-            nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
+            nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Vũ Quốc Phong',
             ten_truong: cauhinh?.ten_truong || appCache.get('cauhinh_hethong')?.ten_truong || 'LÊ THỊ HỒNG GẤM'
         });
     } catch (err) { return res.status(500).json({ ok: false, error: err.message }); }
@@ -3545,8 +3546,8 @@ async function calculateTeacherDutySalary(start, end) {
                 xac_nhan_truc: { [Op.ne]: false },
             },
             include: [
-                { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
-                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan'] }
             ],
             order: [['ngay', 'ASC']]
         });
@@ -3575,7 +3576,7 @@ async function calculateTeacherDutySalary(start, end) {
     const gvMap = {};
     const seenShift = new Set();
     phanCong.forEach(pc => {
-        let actualId, actualName, isNgoai = false, gvDbId = null;
+        let actualId, actualName, isNgoai = false, gvDbId = null, gvStk = '';
         const isSubstitute = Boolean(
             (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) ||
             pc.ma_gv_truc_thay_id
@@ -3590,16 +3591,19 @@ async function calculateTeacherDutySalary(start, end) {
             actualId = pc.ma_gv_truc_thay_id;
             actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
             gvDbId = pc.ma_gv_truc_thay_id;
+            gvStk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
         } else {
             actualId = pc.ma_gv_id;
             actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
             gvDbId = pc.ma_gv_id;
+            gvStk = pc.giao_vien?.so_tai_khoan || '';
         }
 
         if (!gvMap[actualId]) gvMap[actualId] = {
             id: actualId,
             ma_gv_id: gvDbId,
             ho_ten: actualName,
+            so_tai_khoan: gvStk,
             is_ngoai: isNgoai,
             so_ca_an: 0,
             so_ca_ngu: 0,
@@ -3612,6 +3616,9 @@ async function calculateTeacherDutySalary(start, end) {
             chi_tiet_bi_thay: [],
             ca_chi_tiet: [],
         };
+        if (!gvMap[actualId].so_tai_khoan && gvStk) {
+            gvMap[actualId].so_tai_khoan = gvStk;
+        }
 
         const shiftKey = `${actualId}_${pc.ngay}_${pc.loai_truc}`;
         if (seenShift.has(shiftKey)) return;
@@ -3621,6 +3628,7 @@ async function calculateTeacherDutySalary(start, end) {
         gvMap[actualId].ca_chi_tiet.push({
             ngay: pc.ngay,
             loai_truc: pc.loai_truc,
+            phong: pc.ma_phong_id,
             don_gia: donGia
         });
 
@@ -3723,6 +3731,309 @@ router.get('/api/baocao/luong-gv/', loginRequired, roleRequired('admin', 'quan_l
     }
 });
 
+/** GET /api/baocao/cong-an-chi-tiet/?tu_ngay=&den_ngay= - Bảng tính công ăn bán trú chi tiết theo ngày lấy từ CSDL */
+router.get('/api/baocao/cong-an-chi-tiet/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        let start = req.query.tu_ngay;
+        let end = req.query.den_ngay;
+
+        if (!start || !end) {
+            const year = req.query.nam || new Date().getFullYear();
+            const month = req.query.thang || (new Date().getMonth() + 1);
+            start = `${year}-${String(month).padStart(2, '0')}-01`;
+            end = getLastDayYMD(year, month);
+        }
+
+        // Lấy đơn giá ăn từ CauHinhHeThong hoặc CauHinhGia
+        let donGiaAn = 100000;
+        let donGiaYTe = 70000;
+        let donGiaGsBanTru = 250000;
+        const cauHinh = await CauHinhHeThong.findOne();
+        if (cauHinh) {
+            if (cauHinh.phu_cap_gs_an) donGiaAn = parseInt(cauHinh.phu_cap_gs_an) || 100000;
+            if (cauHinh.phu_cap_y_te) donGiaYTe = parseInt(cauHinh.phu_cap_y_te) || 70000;
+            if (cauHinh.phu_cap_gs_ban_tru) donGiaGsBanTru = parseInt(cauHinh.phu_cap_gs_ban_tru) || 250000;
+        } else {
+            const chg = await CauHinhGia.findOne({
+                where: {
+                    loai_truc: 0,
+                    ngay_ap_dung: { [Op.lte]: end }
+                },
+                order: [['ngay_ap_dung', 'DESC']],
+                raw: true
+            });
+            if (chg && chg.don_gia) donGiaAn = parseFloat(chg.don_gia);
+        }
+
+        // Lấy toàn bộ phân công trực ăn (loai_truc = 0) trong khoảng [start, end]
+        const phanCong = await PhanCongTrucGV.findAll({
+            where: {
+                ngay: { [Op.between]: [start, end] },
+                loai_truc: 0,
+                xac_nhan_truc: { [Op.ne]: false }
+            },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] }
+            ],
+            order: [['ngay', 'ASC']]
+        });
+
+        // Tập hợp danh sách ngày làm việc có trực ăn
+        const activeDatesSet = new Set();
+        phanCong.forEach(pc => activeDatesSet.add(pc.ngay));
+        const activeDates = Array.from(activeDatesSet).sort();
+
+        const workDays = activeDates.map(dateStr => {
+            const d = new Date(dateStr + 'T00:00:00');
+            const dow = d.getDay(); // 0=CN, 1=T2, 2=T3, 3=T4, 4=T5, 5=T6, 6=T7
+            const dowStr = (dow === 1) ? '2' : (dow === 2) ? '3' : (dow === 3) ? '4' : (dow === 4) ? '5' : (dow === 5) ? '6' : (dow === 6) ? '7' : 'CN';
+            const parts = dateStr.split('-');
+            return {
+                dateStr,
+                dowStr,
+                dayMonth: `${parts[2]}/${parts[1]}`,
+                day: parseInt(parts[2], 10),
+            };
+        });
+
+        // Nhóm theo giáo viên (mỗi ngày mỗi GV tính tối đa 1 ca)
+        const gvMap = {};
+        const seenShift = new Set();
+
+        phanCong.forEach(pc => {
+            let actualId, actualName, isNgoai = false, gvDbId = null, gvStk = '', nhiemVu = 0;
+            if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+                const cleanName = pc.ten_gv_truc_thay.trim();
+                actualId = `ngoai_${cleanName}`;
+                actualName = cleanName;
+                isNgoai = true;
+                nhiemVu = 0;
+            } else if (pc.ma_gv_truc_thay_id) {
+                actualId = pc.ma_gv_truc_thay_id;
+                actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+                gvDbId = pc.ma_gv_truc_thay_id;
+                gvStk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
+                nhiemVu = pc.giao_vien_truc_thay?.nhiem_vu !== undefined && pc.giao_vien_truc_thay?.nhiem_vu !== null
+                    ? pc.giao_vien_truc_thay.nhiem_vu
+                    : (pc.nhiem_vu ?? 0);
+            } else {
+                actualId = pc.ma_gv_id;
+                actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
+                gvDbId = pc.ma_gv_id;
+                gvStk = pc.giao_vien?.so_tai_khoan || '';
+                nhiemVu = pc.giao_vien?.nhiem_vu !== undefined && pc.giao_vien?.nhiem_vu !== null
+                    ? pc.giao_vien.nhiem_vu
+                    : (pc.nhiem_vu ?? 0);
+            }
+
+            if (!gvMap[actualId]) {
+                gvMap[actualId] = {
+                    id: actualId,
+                    ma_gv_id: gvDbId,
+                    ho_ten: actualName,
+                    so_tai_khoan: gvStk,
+                    is_ngoai: isNgoai,
+                    nhiem_vu: nhiemVu,
+                    ngay_an: [],
+                    so_ca: 0
+                };
+            }
+            if (!gvMap[actualId].so_tai_khoan && gvStk) {
+                gvMap[actualId].so_tai_khoan = gvStk;
+            }
+
+            const shiftKey = `${actualId}_${pc.ngay}`;
+            if (seenShift.has(shiftKey)) return;
+            seenShift.add(shiftKey);
+
+            gvMap[actualId].ngay_an.push(pc.ngay);
+            gvMap[actualId].so_ca++;
+        });
+
+        // Sắp xếp giáo viên theo tên tiếng Việt
+        const gvList = Object.values(gvMap)
+            .filter(g => g.so_ca > 0)
+            .map(g => {
+                let displayName = g.ho_ten;
+                if (displayName.toLowerCase().includes('mai quỳnh châu') && !displayName.includes('KT')) {
+                    displayName += ' (KT ATVSTP)';
+                }
+                return {
+                    ...g,
+                    nhiem_vu: g.nhiem_vu ?? 0,
+                    ho_ten_hien_thi: displayName,
+                    thanh_tien: g.so_ca * donGiaAn
+                };
+            })
+            .sort((a, b) => {
+                const getSortNames = (fullName) => {
+                    const parts = (fullName || '').trim().split(/\s+/);
+                    return {
+                        first: parts[parts.length - 1] || '',
+                        middle: parts.slice(1, -1).join(' '),
+                        last: parts[0] || ''
+                    };
+                };
+                const nameA = getSortNames(a.ho_ten);
+                const nameB = getSortNames(b.ho_ten);
+                let cmp = nameA.first.localeCompare(nameB.first, 'vi');
+                if (cmp !== 0) return cmp;
+                cmp = nameA.last.localeCompare(nameB.last, 'vi');
+                if (cmp !== 0) return cmp;
+                return nameA.middle.localeCompare(nameB.middle, 'vi');
+            });
+
+        // Lấy đơn giá ngủ từ CauHinhGia
+        let donGiaNgu = 180000;
+        const chgNgu = await CauHinhGia.findOne({
+            where: {
+                loai_truc: 1,
+                ngay_ap_dung: { [Op.lte]: end }
+            },
+            order: [['ngay_ap_dung', 'DESC']],
+            raw: true
+        });
+        if (chgNgu && chgNgu.don_gia) donGiaNgu = parseFloat(chgNgu.don_gia);
+
+        // Lấy toàn bộ phân công trực ngủ (loai_truc = 1, tức trực phòng) trong khoảng [start, end]
+        const phanCongNgu = await PhanCongTrucGV.findAll({
+            where: {
+                ngay: { [Op.between]: [start, end] },
+                loai_truc: 1,
+                xac_nhan_truc: { [Op.ne]: false }
+            },
+            include: [
+                { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan'] }
+            ],
+            order: [['ngay', 'ASC']]
+        });
+
+        const gvMapNgu = {};
+        const seenShiftNgu = new Set();
+        phanCongNgu.forEach(pc => {
+            let actualId, actualName, isNgoai = false, gvDbId = null, gvStk = '';
+            if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+                actualName = pc.ten_gv_truc_thay.trim();
+                actualId = `ngoai_${actualName}`;
+                isNgoai = true;
+            } else if (pc.ma_gv_truc_thay_id) {
+                actualId = pc.ma_gv_truc_thay_id;
+                actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+                gvDbId = pc.ma_gv_truc_thay_id;
+                gvStk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
+            } else {
+                actualId = pc.ma_gv_id;
+                actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
+                gvDbId = pc.ma_gv_id;
+                gvStk = pc.giao_vien?.so_tai_khoan || '';
+            }
+
+            const shiftKey = `${actualId}_${pc.ngay}`;
+            if (seenShiftNgu.has(shiftKey)) return;
+            seenShiftNgu.add(shiftKey);
+
+            if (!gvMapNgu[actualId]) {
+                gvMapNgu[actualId] = {
+                    id: actualId,
+                    ma_gv_id: gvDbId,
+                    ho_ten: actualName,
+                    so_tai_khoan: gvStk,
+                    is_ngoai: isNgoai,
+                    ngay_ngu: [],
+                    so_ca: 0
+                };
+            }
+            if (!gvMapNgu[actualId].so_tai_khoan && gvStk) {
+                gvMapNgu[actualId].so_tai_khoan = gvStk;
+            }
+            gvMapNgu[actualId].ngay_ngu.push(pc.ngay);
+            gvMapNgu[actualId].so_ca++;
+        });
+
+        const gvNguList = Object.values(gvMapNgu)
+            .filter(g => g.so_ca > 0)
+            .map(g => ({
+                ...g,
+                ho_ten_hien_thi: g.ho_ten,
+                thanh_tien: g.so_ca * donGiaNgu
+            }))
+            .sort((a, b) => {
+                const getSortNames = (fullName) => {
+                    const parts = (fullName || '').trim().split(/\s+/);
+                    return {
+                        first: parts[parts.length - 1] || '',
+                        middle: parts.slice(1, -1).join(' '),
+                        last: parts[0] || ''
+                    };
+                };
+                const nameA = getSortNames(a.ho_ten);
+                const nameB = getSortNames(b.ho_ten);
+                let cmp = nameA.first.localeCompare(nameB.first, 'vi');
+                if (cmp !== 0) return cmp;
+                cmp = nameA.last.localeCompare(nameB.last, 'vi');
+                if (cmp !== 0) return cmp;
+                return nameA.middle.localeCompare(nameB.middle, 'vi');
+            });
+
+        const nguMap = {};
+        gvNguList.forEach(g => {
+            const key = g.ho_ten.trim().toLowerCase();
+            nguMap[key] = {
+                id: g.id,
+                ma_gv_id: g.ma_gv_id,
+                ho_ten: g.ho_ten,
+                so_tai_khoan: g.so_tai_khoan,
+                so_ca_ngu: g.so_ca,
+                thanh_tien_ngu: g.thanh_tien
+            };
+        });
+
+        // Tính tổng từng ngày trực ăn & trực ngủ
+        const dailyTotals = workDays.map(wd => {
+            return gvList.filter(g => g.ngay_an.includes(wd.dateStr)).length;
+        });
+        const dailyTotalsNgu = workDays.map(wd => {
+            return gvNguList.filter(g => g.ngay_ngu.includes(wd.dateStr)).length;
+        });
+
+        const totalDays = gvList.reduce((s, g) => s + g.so_ca, 0);
+        const totalMoney = totalDays * donGiaAn;
+
+        const totalDaysNgu = gvNguList.reduce((s, g) => s + g.so_ca, 0);
+        const totalMoneyNgu = totalDaysNgu * donGiaNgu;
+
+        const quanLy = await StaffUser.findOne({ where: { role: 'quan_ly', is_active: true } });
+        const keToan = await StaffUser.findOne({ where: { role: 'ke_toan', is_active: true } });
+
+        return res.json({
+            ok: true,
+            tu_ngay: start,
+            den_ngay: end,
+            don_gia_an: donGiaAn,
+            don_gia_ngu: donGiaNgu,
+            don_gia_y_te: donGiaYTe,
+            don_gia_gs_ban_tru: donGiaGsBanTru,
+            workDays,
+            gvList,
+            gvNguList,
+            nguMap,
+            dailyTotals,
+            dailyTotalsNgu,
+            totalDays,
+            totalMoney,
+            totalDaysNgu,
+            totalMoneyNgu,
+            quan_ly_name: quanLy ? (quanLy.fullname || quanLy.username) : '',
+            ke_toan_name: keToan ? (keToan.fullname || keToan.username) : ''
+        });
+    } catch (err) {
+        console.error('Error cong-an-chi-tiet:', err);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 /** GET /api/baocao/ky-truc/ - Danh sách các kỳ trực giáo viên kèm trạng thái thanh toán */
 router.get('/api/baocao/ky-truc/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
     try {
@@ -3789,22 +4100,20 @@ router.get('/api/baocao/ky-truc/:id/preview-chot', loginRequired, roleRequired('
         }
 
         const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+        const tu_ngay = req.query.tu_ngay || ky.tu_ngay;
         const den_ngay = req.query.den_ngay || todayVN;
 
-        if (den_ngay < ky.tu_ngay) {
-            return res.status(400).json({ ok: false, error: `Ngày kết thúc (${den_ngay}) không được trước ngày bắt đầu (${ky.tu_ngay})` });
-        }
-        if (den_ngay > todayVN) {
-            return res.status(400).json({ ok: false, error: 'Không được chốt kỳ vào ngày tương lai' });
+        if (tu_ngay > den_ngay) {
+            return res.status(400).json({ ok: false, error: `Từ ngày (${tu_ngay}) không được lớn hơn Đến ngày (${den_ngay})` });
         }
 
-        const calc = await calculateTeacherDutySalary(ky.tu_ngay, den_ngay);
+        const calc = await calculateTeacherDutySalary(tu_ngay, den_ngay);
 
         return res.json({
             ok: true,
             preview: {
                 ten_ky: ky.ten_ky,
-                tu_ngay: ky.tu_ngay,
+                tu_ngay,
                 den_ngay,
                 tong_so_gv: calc.gvList.length,
                 tong_ca_an: calc.totCaAn,
@@ -3827,37 +4136,37 @@ router.post('/api/baocao/ky-truc/:id/chot', loginRequired, roleRequired('admin',
         }
 
         const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
-        const { den_ngay, ghi_chu } = req.body;
+        const { tu_ngay, den_ngay, ghi_chu } = req.body;
+        const tuNgayChot = tu_ngay || ky.tu_ngay;
         if (!den_ngay) {
             return res.status(400).json({ ok: false, error: 'Vui lòng chọn ngày kết thúc để chốt kỳ' });
         }
-        if (den_ngay < ky.tu_ngay) {
-            return res.status(400).json({ ok: false, error: `Ngày kết thúc (${den_ngay}) không được trước ngày bắt đầu (${ky.tu_ngay})` });
-        }
-        if (den_ngay > todayVN) {
-            return res.status(400).json({ ok: false, error: 'Không được chốt kỳ vào ngày tương lai' });
+        if (den_ngay < tuNgayChot) {
+            return res.status(400).json({ ok: false, error: `Ngày kết thúc (${den_ngay}) không được trước ngày bắt đầu (${tuNgayChot})` });
         }
 
-        // Chặn chồng lấn với các kỳ khác đã tồn tại
+        // Chặn chồng lấn với các kỳ khác đã chốt
         const overlap = await KyTrucGV.findOne({
             where: {
                 id: { [Op.ne]: ky.id },
+                trang_thai: 'da_chot',
                 [Op.and]: [
                     { tu_ngay: { [Op.lte]: den_ngay } },
                     sequelize.where(
                         sequelize.fn('COALESCE', sequelize.col('den_ngay'), '9999-12-31'),
-                        { [Op.gte]: ky.tu_ngay }
+                        { [Op.gte]: tuNgayChot }
                     )
                 ]
             }
         });
         if (overlap) {
-            return res.status(400).json({ ok: false, error: `Khoảng ngày chồng lấn với ${overlap.ten_ky} (${overlap.tu_ngay} đến ${overlap.den_ngay || 'nay'})` });
+            return res.status(400).json({ ok: false, error: `Khoảng ngày (${tuNgayChot} đến ${den_ngay}) bị chồng lấn với ${overlap.ten_ky} (${overlap.tu_ngay} đến ${overlap.den_ngay || 'nay'})! Kỳ sau phải bắt đầu từ ngày mới.` });
         }
 
-        const calc = await calculateTeacherDutySalary(ky.tu_ngay, den_ngay);
+        const calc = await calculateTeacherDutySalary(tuNgayChot, den_ngay);
 
         await ky.update({
+            tu_ngay: tuNgayChot,
             den_ngay,
             trang_thai: 'da_chot',
             ngay_chot: new Date(),
@@ -3870,6 +4179,34 @@ router.post('/api/baocao/ky-truc/:id/chot', loginRequired, roleRequired('admin',
             ghi_chu: ghi_chu || null,
         });
 
+        // Đồng bộ chốt kỳ tương ứng bên Kế toán
+        try {
+            const ktKy = await KeToanKyTongHop.findOne({
+                where: {
+                    [Op.or]: [
+                        { tu_ngay: tuNgayChot },
+                        { id: ky.id },
+                        { trang_thai: 'dang_dien_ra' },
+                    ],
+                },
+                order: [['id', 'DESC']],
+            });
+            if (ktKy && ktKy.trang_thai !== 'da_chot') {
+                await ktKy.update({
+                    tu_ngay: tuNgayChot,
+                    den_ngay,
+                    trang_thai: 'da_chot',
+                    ngay_chot: new Date(),
+                    nguoi_chot_id: req.user.id,
+                    nguoi_chot_ten: req.user.fullname || req.user.username,
+                    tong_tien: calc.totTien,
+                    ghi_chu: ghi_chu || ktKy.ghi_chu,
+                });
+            }
+        } catch (syncKtErr) {
+            console.warn('Lỗi đồng bộ KeToanKyTongHop khi chốt kỳ trực:', syncKtErr.message);
+        }
+
         // Tạo kỳ mới bắt đầu từ ngày kế tiếp
         const nextStart = addDays(den_ngay, 1);
         const count = await KyTrucGV.count();
@@ -3880,6 +4217,26 @@ router.post('/api/baocao/ky-truc/:id/chot', loginRequired, roleRequired('admin',
             trang_thai: 'dang_dien_ra',
             nam_hoc: ky.nam_hoc,
         });
+
+        // Đồng bộ tạo kỳ mới bên Kế toán KeToanKyTongHop
+        try {
+            const existingNextKt = await KeToanKyTongHop.findOne({ where: { tu_ngay: nextStart } });
+            if (!existingNextKt) {
+                const ktCount = await KeToanKyTongHop.count();
+                await KeToanKyTongHop.create({
+                    ten_ky: `TH Kỳ ${ktCount + 1}`,
+                    tu_ngay: nextStart,
+                    den_ngay: todayVN > nextStart ? todayVN : nextStart,
+                    ngay_lap: todayVN,
+                    trang_thai: 'dang_dien_ra',
+                    ghi_chu: `Kỳ mới kế tiếp sau khi chốt ${ky.ten_ky} (từ ${nextStart})`,
+                    created_by_id: req.user.id,
+                    created_by_name: req.user.fullname || req.user.username,
+                });
+            }
+        } catch (syncNextKtErr) {
+            console.warn('Lỗi đồng bộ tạo KeToanKyTongHop kế tiếp:', syncNextKtErr.message);
+        }
 
         if (LichSuThaoTac) {
             await LichSuThaoTac.create({
@@ -3897,6 +4254,66 @@ router.post('/api/baocao/ky-truc/:id/chot', loginRequired, roleRequired('admin',
             message: `Đã chốt ${ky.ten_ky} thành công và tự động tạo ${nextKy.ten_ky} bắt đầu từ ${nextStart}`,
             closed_ky: ky,
             new_ky: nextKy
+        });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+/** POST /api/baocao/ky-truc/:id/mo-lai - Mở lại kỳ trực đã chốt (đồng bộ với Kế toán) */
+router.post('/api/baocao/ky-truc/:id/mo-lai', loginRequired, roleRequired('admin', 'quan_ly', 'ke_toan', 'hieu_truong'), async (req, res) => {
+    try {
+        const ky = await KyTrucGV.findByPk(req.params.id);
+        if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ trực' });
+        if (ky.trang_thai !== 'da_chot') {
+            return res.status(400).json({ ok: false, error: 'Kỳ này chưa bị khóa chốt' });
+        }
+
+        await ky.update({
+            trang_thai: 'dang_dien_ra',
+            ngay_chot: null,
+            nguoi_chot_id: null,
+            nguoi_chot_ten: null,
+        });
+
+        // Đồng bộ mở lại bên Kế toán
+        try {
+            const ktKy = await KeToanKyTongHop.findOne({
+                where: {
+                    [Op.or]: [
+                        { tu_ngay: ky.tu_ngay },
+                        { id: ky.id },
+                    ],
+                },
+                order: [['id', 'DESC']],
+            });
+            if (ktKy) {
+                await ktKy.update({
+                    trang_thai: 'dang_dien_ra',
+                    ngay_chot: null,
+                    nguoi_chot_id: null,
+                    nguoi_chot_ten: null,
+                });
+            }
+        } catch (syncKtErr) {
+            console.warn('Lỗi đồng bộ mở lại KeToanKyTongHop:', syncKtErr.message);
+        }
+
+        if (LichSuThaoTac) {
+            await LichSuThaoTac.create({
+                loai: 'MO_LAI_KY_TRUC',
+                noidung: `Mở lại ${ky.ten_ky} (${ky.tu_ngay} đến ${ky.den_ngay || 'nay'}) - Đồng bộ với Kế toán`,
+                nguoi_thao_tac_id: req.user.id,
+                nguoi_thao_tac_ten: req.user.fullname || req.user.username,
+                chuc_vu: req.user.role,
+                created_at: new Date(),
+            }).catch(() => {});
+        }
+
+        return res.json({
+            ok: true,
+            message: `Đã mở lại ${ky.ten_ky} thành công và đồng bộ với phần Kế toán`,
+            ky,
         });
     } catch (err) {
         return res.status(500).json({ ok: false, error: err.message });
@@ -5203,7 +5620,7 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             ma_bao_mat_hien_tai: heThong?.ma_bao_mat_gv || 'BT789',
             ten_truong: heThong?.ten_truong || 'LÊ THỊ HỒNG GẤM',
             nam_hoc: heThong?.nam_hoc || '2026-2027',
-            nguoi_phu_trach: heThong?.nguoi_phu_trach || 'Tạ Thị Diệu Lê',
+            nguoi_phu_trach: heThong?.nguoi_phu_trach || 'Vũ Quốc Phong',
             phongChuaBaoCaoAn,
             phongChuaBaoCaoNgu,
             giamSatChuaBaoCao,

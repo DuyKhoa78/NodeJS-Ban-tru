@@ -54,6 +54,26 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
         defaultValue: '',
         comment: 'Link Google Form dự phòng để GV gửi báo cáo nếu cần',
     },
+    phu_cap_truc_tbi: {
+        type: DataTypes.INTEGER,
+        defaultValue: 100000,
+        comment: 'Phụ cấp Trực Thiết bị (đồng/ca)',
+    },
+    phu_cap_gs_ban_tru: {
+        type: DataTypes.INTEGER,
+        defaultValue: 250000,
+        comment: 'Phụ cấp Giám sát bán trú (đồng/ca)',
+    },
+    phu_cap_gs_an: {
+        type: DataTypes.INTEGER,
+        defaultValue: 100000,
+        comment: 'Phụ cấp Giám sát ăn (đồng/ca)',
+    },
+    phu_cap_y_te: {
+        type: DataTypes.INTEGER,
+        defaultValue: 70000,
+        comment: 'Phụ cấp Y tế (đồng/ca)',
+    },
 }, {
     tableName: 'core_cauhinhhethong',
     timestamps: false,

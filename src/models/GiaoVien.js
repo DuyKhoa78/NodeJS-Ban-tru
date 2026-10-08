@@ -40,6 +40,16 @@ const GiaoVien = sequelize.define('GiaoVien', {
     unique: true,
     comment: 'Mã 5 ký tự bảo mật riêng của GV khi gửi Google Form báo cáo trực',
   },
+  so_tai_khoan: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    comment: 'Số tài khoản ngân hàng của giáo viên',
+  },
+  ngan_hang: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: 'Tên ngân hàng',
+  },
 }, {
   tableName: 'quanli_giaovien',
   timestamps: false,

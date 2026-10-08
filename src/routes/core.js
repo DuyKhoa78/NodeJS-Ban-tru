@@ -56,7 +56,7 @@ router.get('/api/the-ban-tru/danh-sach', loginRequired, roleRequired('admin', 'h
 
     const [ch] = await CauHinhHeThong.findOrCreate({
       where: { id: 1 },
-      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' },
+      defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Vũ Quốc Phong', ten_truong: 'LÊ THỊ HỒNG GẤM' },
     });
 
     const avatarsDir = path.resolve(__dirname, '../../uploads/avatars');
@@ -116,7 +116,7 @@ router.get('/api/dashboard/', loginRequired, async (req, res) => {
     if (!cauhinh) {
       const [ch] = await CauHinhHeThong.findOrCreate({
         where: { id: 1 },
-        defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' },
+        defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Vũ Quốc Phong', ten_truong: 'LÊ THỊ HỒNG GẤM' },
       });
       cauhinh = ch.toJSON();
       coreCache.set('cauhinh', cauhinh);

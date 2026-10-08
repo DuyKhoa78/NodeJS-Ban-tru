@@ -897,11 +897,13 @@ async function generateUniqueTeacherCode(assignedSet = null) {
 /** POST /api/giaovien/save/ */
 router.post('/api/giaovien/save/', loginRequired, roleRequired('admin'), async (req, res) => {
   try {
-    const { id, ho_ten, gioi_tinh, so_dien_thoai, nhiem_vu, dang_lam, lich_ranh, ma_bao_mat } = req.body;
+    const { id, ho_ten, gioi_tinh, so_dien_thoai, so_tai_khoan, ngan_hang, nhiem_vu, dang_lam, lich_ranh, ma_bao_mat } = req.body;
     const data = {
       ho_ten: String(ho_ten).trim(),
       gioi_tinh: parseInt(gioi_tinh),
       so_dien_thoai: so_dien_thoai ? String(so_dien_thoai).trim() : null,
+      so_tai_khoan: so_tai_khoan ? String(so_tai_khoan).trim() : null,
+      ngan_hang: ngan_hang ? String(ngan_hang).trim() : null,
       nhiem_vu: parseInt(nhiem_vu) || 0,
       dang_lam: dang_lam !== undefined ? dang_lam : true,
       lich_ranh: lich_ranh || [false, false, false, false, false],
@@ -1327,7 +1329,7 @@ router.get('/api/cauhinh/', loginRequired, roleRequired('admin', 'quan_ly', 'ke_
     const giaAn = await CauHinhGia.findOne({ where: { loai_truc: 0 }, order: [['ngay_ap_dung', 'DESC']] });
     const giaNgu = await CauHinhGia.findOne({ where: { loai_truc: 1 }, order: [['ngay_ap_dung', 'DESC']] });
     const giaTienAnHS = await CauHinhGia.findOne({ where: { loai_truc: 2 }, order: [['ngay_ap_dung', 'DESC']] });
-    const [hethong] = await CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Tạ Thị Diệu Lê', ten_truong: 'LÊ THỊ HỒNG GẤM' } });
+    const [hethong] = await CauHinhHeThong.findOrCreate({ where: { id: 1 }, defaults: { nam_hoc: '2026-2027', nguoi_phu_trach: 'Vũ Quốc Phong', ten_truong: 'LÊ THỊ HỒNG GẤM' } });
     if (hethong.nam_hoc === '2025-2026') {
       hethong.nam_hoc = '2026-2027';
       await hethong.save();
@@ -1505,7 +1507,7 @@ router.get('/api/public/system-status/', async (req, res) => {
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     systemStatusCache = null; // Xóa cache ngay khi cấu hình thay đổi
-    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri, tien_an } = req.body;
+    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri, tien_an, phu_cap_truc_tbi, phu_cap_gs_ban_tru, phu_cap_gs_an, phu_cap_y_te } = req.body;
     const updateData = {
       id: 1,
       nam_hoc,
@@ -1514,6 +1516,10 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
       ngay_cap_nhat: new Date().toISOString().split('T')[0],
     };
     if (tien_an !== undefined) updateData.tien_an = Math.max(0, parseInt(tien_an) || 0);
+    if (phu_cap_truc_tbi !== undefined) updateData.phu_cap_truc_tbi = Math.max(0, parseInt(phu_cap_truc_tbi) || 0);
+    if (phu_cap_gs_ban_tru !== undefined) updateData.phu_cap_gs_ban_tru = Math.max(0, parseInt(phu_cap_gs_ban_tru) || 0);
+    if (phu_cap_gs_an !== undefined) updateData.phu_cap_gs_an = Math.max(0, parseInt(phu_cap_gs_an) || 0);
+    if (phu_cap_y_te !== undefined) updateData.phu_cap_y_te = Math.max(0, parseInt(phu_cap_y_te) || 0);
     if (ma_bao_mat_gv !== undefined) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
     
     // Chỉ duy nhất Super Admin mới có quyền cấu hình chế độ bảo trì

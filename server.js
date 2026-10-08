@@ -18,6 +18,7 @@ const coreRoutes = require('./src/routes/core');
 const accountsRoutes = require('./src/routes/accounts');
 const quanliRoutes = require('./src/routes/quanli');
 const nghiepvuRoutes = require('./src/routes/nghiepvu');
+const ketoanRoutes = require('./src/routes/ketoan');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -40,6 +41,7 @@ const ALLOWED_ORIGINS = [
   // Domain tùy chỉnh (nếu có cấu hình trong env)
   process.env.FRONTEND_URL,
   // Local dev & LAN mobile access
+  'http://localhost:5180',
   'http://localhost:5173',
   'http://localhost:3000',
   /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/,
@@ -125,6 +127,7 @@ app.use('/', coreRoutes);
 app.use('/', accountsRoutes);
 app.use('/', quanliRoutes);
 app.use('/', nghiepvuRoutes);
+app.use('/api/ketoan', ketoanRoutes);
 
 // ─── Health check / Root ──────────────────────────────────────────────────────
 app.get('/', (req, res) => {

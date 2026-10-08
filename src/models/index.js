@@ -96,6 +96,28 @@ ThanhToanLuongGV.belongsTo(GiaoVien, { foreignKey: 'ma_gv_id', as: 'giao_vien' }
 GiaoVien.hasMany(ThanhToanLuongGV, { foreignKey: 'ma_gv_id', as: 'lich_su_nhan_luong' });
 ThanhToanLuongGV.belongsTo(StaffUser, { foreignKey: 'nguoi_thao_tac_id', as: 'nguoi_thao_tac' });
 
+// ─── Kế toán: Tổng hợp chi trả công tác bán trú ───────────────────────────
+const KeToanDanhMucKhoanChi = require('./KeToanDanhMucKhoanChi');
+const KeToanKyTongHop = require('./KeToanKyTongHop');
+const KeToanNguoiNhan = require('./KeToanNguoiNhan');
+const KeToanChiTietKhoanChi = require('./KeToanChiTietKhoanChi');
+const KeToanThanhToanChiTiet = require('./KeToanThanhToanChiTiet');
+const KeToanLichSuThietLap = require('./KeToanLichSuThietLap');
+
+KeToanKyTongHop.hasMany(KeToanNguoiNhan, { foreignKey: 'ky_id', as: 'danh_sach_nguoi_nhan' });
+KeToanNguoiNhan.belongsTo(KeToanKyTongHop, { foreignKey: 'ky_id', as: 'ky_tong_hop' });
+
+KeToanNguoiNhan.belongsTo(GiaoVien, { foreignKey: 'nhan_su_id', as: 'giao_vien' });
+
+KeToanNguoiNhan.hasMany(KeToanChiTietKhoanChi, { foreignKey: 'nguoi_nhan_id', as: 'chi_tiet_khoan_chi' });
+KeToanChiTietKhoanChi.belongsTo(KeToanNguoiNhan, { foreignKey: 'nguoi_nhan_id', as: 'nguoi_nhan' });
+
+KeToanChiTietKhoanChi.belongsTo(KeToanDanhMucKhoanChi, { foreignKey: 'khoan_chi_id', as: 'danh_muc' });
+KeToanDanhMucKhoanChi.hasMany(KeToanChiTietKhoanChi, { foreignKey: 'khoan_chi_id', as: 'chi_tiet' });
+
+KeToanKyTongHop.hasMany(KeToanThanhToanChiTiet, { foreignKey: 'ky_id', as: 'lich_su_thanh_toan' });
+KeToanNguoiNhan.hasMany(KeToanThanhToanChiTiet, { foreignKey: 'nguoi_nhan_id', as: 'lich_su_thanh_toan' });
+
 module.exports = {
   sequelize,
   StaffUser,
@@ -120,4 +142,10 @@ module.exports = {
   ThuTienBanTru,
   KyTrucGV,
   ThanhToanLuongGV,
+  KeToanDanhMucKhoanChi,
+  KeToanKyTongHop,
+  KeToanNguoiNhan,
+  KeToanChiTietKhoanChi,
+  KeToanThanhToanChiTiet,
+  KeToanLichSuThietLap,
 };

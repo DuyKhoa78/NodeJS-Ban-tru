@@ -146,7 +146,7 @@ CauHinhGia {
 CauHinhHeThong {
   id: INTEGER PK (luôn =1),
   nam_hoc: STRING(20) default '2025-2026',
-  nguoi_phu_trach: STRING(100) default 'Tạ Thị Diệu Lê',
+  nguoi_phu_trach: STRING(100) default 'Vũ Quốc Phong',
   ten_truong: STRING(200) default 'LÊ THỊ HỒNG GẤM',
   ngay_cap_nhat: DATE
 }
