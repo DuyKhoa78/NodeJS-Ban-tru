@@ -25,6 +25,13 @@ const ketoanViewOrAdmin = [loginRequired, roleRequired('admin', 'ke_toan', 'quan
 // Middleware: Chỉ kế toán và admin/superuser mới được chỉnh sửa / chốt kỳ / xóa
 const ketoanOrAdmin = [loginRequired, roleRequired('admin', 'ke_toan')];
 
+// Helper kiểm tra quyền Quản trị viên cấp cao (Super Admin)
+const isSuperAdminUser = (req) => {
+  const u = req.user;
+  if (!u) return false;
+  return Boolean(u.is_superuser === true || u.role === 'admin' || u.role === 'super_admin' || u.is_admin);
+};
+
 // Helper log thao tác thiết lập
 async function logThietLap(hanhDong, noiDung, req) {
   try {
@@ -210,42 +217,23 @@ router.get('/ky-tong-hop', ketoanViewOrAdmin, async (req, res) => {
   try {
     const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 
-    // Tự động đồng bộ ngày kết thúc và ngày lập cho các kỳ đang diễn ra lên đến ngày hôm nay
-    try {
-      await KeToanKyTongHop.update(
-        { den_ngay: todayVN, ngay_lap: todayVN },
-        {
-          where: {
-            trang_thai: 'dang_dien_ra',
-          },
-        }
-      );
-      await KyTrucGV.update(
-        { den_ngay: todayVN },
-        {
-          where: {
-            trang_thai: 'dang_dien_ra',
-            [Op.or]: [{ den_ngay: null }, { den_ngay: { [Op.lt]: todayVN } }],
-          },
-        }
-      );
-    } catch (dateErr) {
-      console.warn('Lỗi auto-sync den_ngay/ngay_lap:', dateErr.message);
-    }
-
     const list = await KeToanKyTongHop.findAll({
       order: [['tu_ngay', 'DESC'], ['id', 'DESC']],
     });
-    const mapped = list.map((k) => {
+    const mapped = [];
+    for (const k of list) {
+      const isSystemKy = k.ten_ky?.toLowerCase().includes('hệ thống') || k.created_by_name === 'Hệ thống';
+      // Chỉ tự động đồng bộ den_ngay theo todayVN nếu là KỲ HỆ THỐNG đang diễn ra
+      if (isSystemKy && k.trang_thai === 'dang_dien_ra' && todayVN >= k.tu_ngay && k.den_ngay !== todayVN) {
+        await k.update({ den_ngay: todayVN, ngay_lap: todayVN });
+      }
       const isDaChot = k.trang_thai === 'da_chot';
-      const ngayLap = isDaChot
-        ? (k.den_ngay || (k.ngay_chot ? String(k.ngay_chot).substring(0, 10) : todayVN))
-        : todayVN;
-      return {
+      const ngayLap = k.ngay_lap || (isDaChot ? (k.den_ngay || (k.ngay_chot ? String(k.ngay_chot).substring(0, 10) : todayVN)) : todayVN);
+      mapped.push({
         ...k.toJSON(),
         ngay_lap: ngayLap,
-      };
-    });
+      });
+    }
     return res.json({ ok: true, data: mapped });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -267,6 +255,21 @@ router.post('/ky-tong-hop', ketoanOrAdmin, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Từ ngày không được lớn hơn Đến ngày' });
     }
 
+    // Kiểm tra không được chồng lấn khoảng ngày với kỳ đã chốt (BỎ QUA KỲ HỆ THỐNG)
+    const overlapping = await KeToanKyTongHop.findOne({
+      where: {
+        trang_thai: 'da_chot',
+        tu_ngay: { [Op.lte]: den_ngay },
+        den_ngay: { [Op.gte]: tu_ngay },
+      },
+    });
+    if (overlapping) {
+      return res.status(400).json({
+        ok: false,
+        error: `Khoảng ngày (${tu_ngay} → ${den_ngay}) bị chồng lấn với kỳ đã chốt "${overlapping.ten_ky}" (${overlapping.tu_ngay} → ${overlapping.den_ngay})! Kỳ mới không được chồng lấn ngày với kỳ đã chốt sổ.`,
+      });
+    }
+
     const user = req.user || {};
     const ky = await KeToanKyTongHop.create({
       ten_ky: ten_ky.trim(),
@@ -285,8 +288,34 @@ router.post('/ky-tong-hop', ketoanOrAdmin, async (req, res) => {
       req
     );
 
-    // Không ghi hàng trăm dòng chi tiết vào CSDL làm tốn dung lượng
-    // Tiền và công trực được tính trực tiếp on-the-fly theo yêu cầu
+    // Tự động khởi tạo dữ liệu nhân sự và các khoản định kỳ từ kỳ trước
+    await ensureKyDataFromDb(ky);
+    await ky.reload();
+
+    // Tự động cập nhật lại Kỳ hệ thống (nếu có) để bắt đầu tiếp nối ngay sau kỳ vừa tạo
+    const systemKy = await KeToanKyTongHop.findOne({
+      where: {
+        id: { [Op.ne]: ky.id },
+        [Op.or]: [
+          { ten_ky: { [Op.iLike]: '%hệ thống%' } },
+          { created_by_name: 'Hệ thống' },
+        ],
+      },
+    });
+    if (systemKy) {
+      const nextSysTuNgay = addDays(den_ngay, 1);
+      const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+      const nextSysDenNgay = todayVN >= nextSysTuNgay ? todayVN : nextSysTuNgay;
+      await systemKy.update({
+        tu_ngay: nextSysTuNgay,
+        den_ngay: nextSysDenNgay,
+        ngay_lap: todayVN,
+      });
+      // Làm mới dữ liệu công trực tự động của kỳ hệ thống theo khoảng ngày mới
+      await KeToanChiTietKhoanChi.destroy({ where: { ky_id: systemKy.id, nguon_cap_nhat: 'csdl_tu_dong' } });
+      await ensureKyDataFromDb(systemKy);
+    }
+
     return res.json({ ok: true, data: ky });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -323,13 +352,44 @@ async function recalculateKyTotals(kyId, transaction = null, singleNnId = null) 
       );
     }
   } else {
-    const nguoiNhans = await KeToanNguoiNhan.findAll({ where: { ky_id: kyId }, transaction: t });
-    for (const nn of nguoiNhans) {
-      const chiTiets = await KeToanChiTietKhoanChi.findAll({ where: { nguoi_nhan_id: nn.id }, transaction: t });
-      const nnTongTien = chiTiets.reduce((sum, ct) => sum + parseFloat(ct.thanh_tien || 0), 0);
+    // Tối ưu hóa: gom nhóm bằng SQL SUM (2 query duy nhất thay vì 87 queries)
+    const [ctSums, ttSums, nguoiNhans] = await Promise.all([
+      KeToanChiTietKhoanChi.findAll({
+        attributes: [
+          'nguoi_nhan_id',
+          [sequelize.fn('COALESCE', sequelize.fn('SUM', sequelize.col('thanh_tien')), 0), 'total_amount'],
+        ],
+        where: { ky_id: kyId },
+        group: ['nguoi_nhan_id'],
+        raw: true,
+        transaction: t,
+      }),
+      KeToanThanhToanChiTiet.findAll({
+        attributes: [
+          'nguoi_nhan_id',
+          [sequelize.fn('COALESCE', sequelize.fn('SUM', sequelize.col('so_tien')), 0), 'total_paid'],
+        ],
+        where: { ky_id: kyId },
+        group: ['nguoi_nhan_id'],
+        raw: true,
+        transaction: t,
+      }),
+      KeToanNguoiNhan.findAll({ where: { ky_id: kyId }, transaction: t }),
+    ]);
 
-      const thanhToans = await KeToanThanhToanChiTiet.findAll({ where: { nguoi_nhan_id: nn.id }, transaction: t });
-      const nnDaChi = thanhToans.reduce((sum, tt) => sum + parseFloat(tt.so_tien || 0), 0);
+    const ctSumMap = {};
+    ctSums.forEach((r) => {
+      ctSumMap[r.nguoi_nhan_id] = parseFloat(r.total_amount) || 0;
+    });
+
+    const ttSumMap = {};
+    ttSums.forEach((r) => {
+      ttSumMap[r.nguoi_nhan_id] = parseFloat(r.total_paid) || 0;
+    });
+
+    for (const nn of nguoiNhans) {
+      const nnTongTien = ctSumMap[nn.id] || 0;
+      const nnDaChi = ttSumMap[nn.id] || 0;
 
       let trangThaiTt = 'chua_chi';
       if (nnDaChi >= nnTongTien && nnTongTien > 0) {
@@ -338,14 +398,20 @@ async function recalculateKyTotals(kyId, transaction = null, singleNnId = null) 
         trangThaiTt = 'chi_mot_phan';
       }
 
-      await nn.update(
-        {
-          tong_tien: nnTongTien,
-          da_thanh_toan: nnDaChi,
-          trang_thai_tt: trangThaiTt,
-        },
-        { transaction: t }
-      );
+      if (
+        parseFloat(nn.tong_tien) !== nnTongTien ||
+        parseFloat(nn.da_thanh_toan) !== nnDaChi ||
+        nn.trang_thai_tt !== trangThaiTt
+      ) {
+        await nn.update(
+          {
+            tong_tien: nnTongTien,
+            da_thanh_toan: nnDaChi,
+            trang_thai_tt: trangThaiTt,
+          },
+          { transaction: t }
+        );
+      }
     }
   }
 
@@ -370,6 +436,12 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
   try {
     const ky = await KeToanKyTongHop.findByPk(req.params.id);
     if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
+
+    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+    const isSystemKy = ky.ten_ky?.toLowerCase().includes('hệ thống') || ky.created_by_name === 'Hệ thống';
+    if (isSystemKy && ky.trang_thai === 'dang_dien_ra' && todayVN >= ky.tu_ngay && ky.den_ngay !== todayVN) {
+      await ky.update({ den_ngay: todayVN, ngay_lap: todayVN });
+    }
 
     // Xác định cấu hình danh mục cột khoản chi
     const dm = await KeToanDanhMucKhoanChi.findAll({
@@ -396,12 +468,11 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
     // Khi kỳ đang diễn ra (hoặc chưa chốt): Tính toán trực tiếp số tiền từ công trực CSDL và cấu hình đơn giá
     // Tính toán tức thì trong RAM (chỉ 2 câu SELECT thay vì 270 câu UPDATE qua mạng)
     if (ky.trang_thai !== 'da_chot') {
-      const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
-      if (ky.den_ngay < todayVN || ky.ngay_lap !== todayVN) {
-        await ky.update({ den_ngay: todayVN, ngay_lap: todayVN });
+      // Chỉ khởi tạo dữ liệu CSDL nếu kỳ chưa có bất kỳ chi tiết khoản chi nào (tránh làm chậm trang)
+      const countCt = await KeToanChiTietKhoanChi.count({ where: { ky_id: ky.id } });
+      if (countCt === 0) {
+        await ensureKyDataFromDb(ky);
       }
-
-      const { sortedStaff } = await fetchAttendanceSourceData(ky.tu_ngay, ky.den_ngay);
 
       const existingNguoiNhans = await KeToanNguoiNhan.findAll({
         where: { ky_id: ky.id },
@@ -409,170 +480,52 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
           { model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' },
           { model: KeToanThanhToanChiTiet, as: 'lich_su_thanh_toan' },
         ],
-      });
-      const nnByName = {};
-      existingNguoiNhans.forEach((nn) => {
-        nnByName[nn.ho_ten.trim().toLowerCase()] = nn;
+        order: [['stt', 'ASC'], ['id', 'ASC']],
       });
 
-      // Tìm các kỳ trước (có dữ liệu) để kế thừa khoản Định kỳ và triệt tiêu khoản 1 lần
-      const allPriorKys = await KeToanKyTongHop.findAll({
-        where: {
-          id: { [Op.ne]: ky.id },
-          [Op.or]: [
-            { den_ngay: { [Op.lte]: ky.tu_ngay } },
-            { id: { [Op.lt]: ky.id } },
-          ],
-        },
-        order: [['den_ngay', 'DESC'], ['id', 'DESC']],
-        include: [
-          {
-            model: KeToanNguoiNhan,
-            as: 'danh_sach_nguoi_nhan',
-            include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
-          },
-        ],
-      });
-
-      const prevKyDetailsByPerson = {};
-      // Quét từ các kỳ trước (ưu tiên kỳ gần nhất có dữ liệu)
-      allPriorKys.forEach((priorKy) => {
-        (priorKy.danh_sach_nguoi_nhan || []).forEach((pnn) => {
-          const cName = pnn.ho_ten.trim().toLowerCase();
-          if (!prevKyDetailsByPerson[cName]) {
-            prevKyDetailsByPerson[cName] = {};
-          }
-          (pnn.chi_tiet_khoan_chi || []).forEach((pct) => {
-            if (!prevKyDetailsByPerson[cName][pct.ma_khoan_chi]) {
-              prevKyDetailsByPerson[cName][pct.ma_khoan_chi] = pct;
-            }
-          });
-        });
-      });
-
-      const STRICT_LOCKED_COLS = ['truc_phong', 'y_te', 'bt_an', 'thiet_bi', 'gs_an'];
-
-      rows = sortedStaff.map((p, idx) => {
-        const clean = p.ho_ten.trim().toLowerCase();
-        const existingNn = nnByName[clean];
-        const isHuynhDucVinh = clean.includes('huỳnh đức vịnh') || clean.includes('đức vịnh');
-        const isNhatTan = clean.includes('nhật tân');
-        const isMaiQuynhChau = clean.includes('mai quỳnh châu') || clean.includes('quỳnh châu') || clean === 'châu' || clean.endsWith(' châu');
-
+      rows = existingNguoiNhans.map((nn, idx) => {
         const chiTietMap = {};
         let rowTotal = 0;
 
         danhMucColumns.forEach((col) => {
-          const existingCt = existingNn?.chi_tiet_khoan_chi?.find((c) => c.ma_khoan_chi === col.ma_khoan_chi);
-          let amt = p.amounts[col.ma_khoan_chi] || 0;
-          let soNgay = 0;
-          let donGia = col.don_gia_mac_dinh;
-          let tienNhap = 0;
-          let tienDieuChinh = 0;
-          let lyDoDieuChinh = '';
-
-          const isStrictLocked = STRICT_LOCKED_COLS.includes(col.ma_khoan_chi);
-          const isHuynhDucVinhGs = isHuynhDucVinh && col.ma_khoan_chi === 'gs_ban_tru';
-
-          if (col.ma_khoan_chi === 'truc_phong') {
-            soNgay = p.counts.so_ca_ngu;
-            donGia = 180000;
-          } else if (col.ma_khoan_chi === 'bt_an') {
-            soNgay = p.counts.so_ca_an;
-            donGia = 100000;
-          } else if (col.ma_khoan_chi === 'thiet_bi') {
-            soNgay = isNhatTan ? 16 : 0;
-            donGia = 100000;
-          } else if (col.ma_khoan_chi === 'y_te') {
-            soNgay = isMaiQuynhChau ? p.counts.so_ngay_ban_tru : 0;
-            donGia = 70000;
-          } else if (col.ma_khoan_chi === 'gs_an') {
-            soNgay = isMaiQuynhChau ? 16 : (p.amounts.gs_an ? Math.round(p.amounts.gs_an / 100000) : 0);
-            donGia = 100000;
-          } else if (col.ma_khoan_chi === 'gs_ban_tru') {
-            soNgay = isHuynhDucVinh ? 9 : (clean.includes('quốc phong') ? p.counts.so_ngay_ban_tru : 0);
-            donGia = 250000;
-          } else {
-            soNgay = p.counts.so_ngay_ban_tru;
-          }
-
-          const is3GreenCols = ['vs_bv', 'tiep_nhan_vd', 'cap_nhat_tt'].includes(col.ma_khoan_chi);
-          const prevCt = prevKyDetailsByPerson[clean]?.[col.ma_khoan_chi];
-
-          // 5 cột khóa tuyệt đối KHÔNG cho phép chỉnh sửa đè; chỉ các cột khác hoặc Huỳnh Đức Vịnh trên gs_ban_tru mới lấy manual
-          if (!isStrictLocked && existingCt) {
-            tienNhap = parseFloat(existingCt.tien_nhap) || ((col.loai_tinh === 'truc_tiep' || col.loai_tinh === 'nhap_truc_tiep') ? (parseFloat(existingCt.thanh_tien) || amt) : 0);
-            tienDieuChinh = parseFloat(existingCt.tien_dieu_chinh) || 0;
-            lyDoDieuChinh = existingCt.ly_do_dieu_chinh || '';
-
-            if (isHuynhDucVinhGs || existingCt.nguon_cap_nhat === 'manual' || tienDieuChinh !== 0) {
-              amt = parseFloat(existingCt.thanh_tien) !== undefined && existingCt.thanh_tien !== null ? parseFloat(existingCt.thanh_tien) : amt;
-              soNgay = parseFloat(existingCt.so_ngay) !== undefined && existingCt.so_ngay !== null ? parseFloat(existingCt.so_ngay) : soNgay;
-              donGia = parseFloat(existingCt.don_gia) !== undefined && existingCt.don_gia !== null ? parseFloat(existingCt.don_gia) : donGia;
-            }
-          } else if (!isStrictLocked) {
-            // Khi ô chưa lưu trong kỳ hiện tại:
-            if (is3GreenCols && prevCt) {
-              // Quy tắc: Khoản chi 1 lần ở kỳ trước qua kỳ khác TUYỆT ĐỐI KHÔNG XUẤT HIỆN (tiền = 0)!
-              if (prevCt.tan_suat === 'mot_lan' || prevCt.tan_suat === '1_lan') {
-                amt = 0;
-                tienNhap = 0;
-              } else if (prevCt.tan_suat === 'dinh_ky') {
-                // Khoản định kỳ: tự động kế thừa sang kỳ mới
-                amt = parseFloat(prevCt.thanh_tien) || 0;
-                tienNhap = parseFloat(prevCt.tien_nhap) || amt;
-              }
-            } else {
-              tienNhap = (col.loai_tinh === 'truc_tiep' || col.loai_tinh === 'nhap_truc_tiep') ? amt : 0;
-            }
-          }
-
-          let tanSuatCell = existingCt?.tan_suat;
-          if (!tanSuatCell) {
-            if (is3GreenCols) {
-              if (amt > 0) {
-                tanSuatCell = prevCt?.tan_suat || col.tan_suat || 'dinh_ky';
-              } else {
-                tanSuatCell = 'dinh_ky';
-              }
-            } else {
-              tanSuatCell = col.tan_suat || 'dinh_ky';
-            }
-          }
+          const ct = nn.chi_tiet_khoan_chi?.find((c) => c.ma_khoan_chi === col.ma_khoan_chi);
+          const amt = parseFloat(ct?.thanh_tien) || 0;
+          const soNgay = Math.round(parseFloat(ct?.so_ngay) || 0);
+          const donGia = parseFloat(ct?.don_gia) || col.don_gia_mac_dinh;
 
           chiTietMap[col.ma_khoan_chi] = {
-            id: existingCt?.id,
+            id: ct?.id,
             ma_khoan_chi: col.ma_khoan_chi,
-            loai_tinh: existingCt?.loai_tinh || col.loai_tinh,
-            tan_suat: tanSuatCell,
+            loai_tinh: ct?.loai_tinh || col.loai_tinh,
+            tan_suat: ct?.tan_suat || col.tan_suat || 'dinh_ky',
             so_ngay: soNgay,
             don_gia: donGia,
-            tien_nguon: p.amounts[col.ma_khoan_chi] || 0,
-            tien_nhap: tienNhap,
-            tien_dieu_chinh: tienDieuChinh,
-            ly_do_dieu_chinh: lyDoDieuChinh,
+            tien_nguon: parseFloat(ct?.tien_nguon) || 0,
+            tien_nhap: parseFloat(ct?.tien_nhap) || 0,
+            tien_dieu_chinh: parseFloat(ct?.tien_dieu_chinh) || 0,
+            ly_do_dieu_chinh: ct?.ly_do_dieu_chinh || '',
             thanh_tien: amt,
-            ghi_chu: existingCt?.ghi_chu || '',
+            ghi_chu: ct?.ghi_chu || '',
           };
           columnTotals[col.ma_khoan_chi] += amt;
           rowTotal += amt;
         });
 
-        const daThanhToan = parseFloat(existingNn?.da_thanh_toan) || 0;
+        const daThanhToan = parseFloat(nn.da_thanh_toan) || 0;
         return {
-          id: existingNn?.id || p.nhan_su_id || idx + 1,
-          stt: idx + 1,
-          nhan_su_id: p.nhan_su_id,
-          ma_dinh_danh: existingNn?.ma_dinh_danh || (p.nhan_su_id ? `GV${p.nhan_su_id}` : `EXT_${idx}`),
-          ho_ten: p.ho_ten,
-          so_tai_khoan: existingNn?.so_tai_khoan || p.so_tai_khoan || '',
+          id: nn.id,
+          stt: nn.stt || idx + 1,
+          nhan_su_id: nn.nhan_su_id,
+          ma_dinh_danh: nn.ma_dinh_danh,
+          ho_ten: nn.ho_ten,
+          so_tai_khoan: nn.so_tai_khoan || '',
           tong_tien: rowTotal,
           da_thanh_toan: daThanhToan,
           con_lai: Math.max(0, rowTotal - daThanhToan),
-          trang_thai_tt: existingNn?.trang_thai_tt || 'chua_chi',
-          ghi_chu: existingNn?.ghi_chu || '',
+          trang_thai_tt: nn.trang_thai_tt || 'chua_chi',
+          ghi_chu: nn.ghi_chu || '',
           chi_tiet: chiTietMap,
-          lich_su_thanh_toan: existingNn?.lich_su_thanh_toan || [],
+          lich_su_thanh_toan: nn.lich_su_thanh_toan || [],
         };
       });
     } else {
@@ -655,14 +608,16 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
     const grandTotal = rows.reduce((s, r) => s + r.tong_tien, 0);
     const grandPaid = rows.reduce((s, r) => s + r.da_thanh_toan, 0);
 
-    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
     const isDaChot = ky.trang_thai === 'da_chot';
     const computedNgayLap = isDaChot
       ? (ky.den_ngay || (ky.ngay_chot ? String(ky.ngay_chot).substring(0, 10) : todayVN))
       : todayVN;
+    const currentUser = req.user || {};
+    const effectiveCreatedByName = currentUser.fullname || currentUser.username || ky.created_by_name || 'Kế toán';
     const kyPayload = {
       ...ky.toJSON(),
       ngay_lap: computedNgayLap,
+      created_by_name: effectiveCreatedByName,
     };
 
     return res.json({
@@ -682,27 +637,85 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/ketoan/ky-tong-hop/:id (Cập nhật thông tin kỳ nháp)
+// PUT /api/ketoan/ky-tong-hop/:id (Cập nhật thông tin kỳ - Super Admin có toàn quyền can thiệp)
 router.put('/ky-tong-hop/:id', ketoanOrAdmin, async (req, res) => {
   try {
     const ky = await KeToanKyTongHop.findByPk(req.params.id);
     if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
-    if (ky.trang_thai === 'da_chot') {
-      return res.status(400).json({ ok: false, error: 'Kỳ đã chốt, không thể chỉnh sửa thông tin chung' });
+
+    const isSuperAdmin = isSuperAdminUser(req);
+    if (ky.trang_thai === 'da_chot' && !isSuperAdmin) {
+      return res.status(400).json({ ok: false, error: 'Kỳ đã chốt, chỉ Quản trị viên cấp cao (Super Admin) mới có quyền chỉnh sửa thông tin kỳ' });
     }
 
-    const { ten_ky, tu_ngay, den_ngay, ngay_lap, ghi_chu } = req.body;
+    const { ten_ky, tu_ngay, den_ngay, ngay_lap, ghi_chu, trang_thai } = req.body;
     if (tu_ngay && den_ngay && tu_ngay > den_ngay) {
       return res.status(400).json({ ok: false, error: 'Từ ngày không được lớn hơn Đến ngày' });
     }
 
-    await ky.update({
+    const targetTu = tu_ngay || ky.tu_ngay;
+    const targetDen = den_ngay || ky.den_ngay;
+    const overlapping = await KeToanKyTongHop.findOne({
+      where: {
+        id: { [Op.ne]: ky.id },
+        trang_thai: 'da_chot',
+        tu_ngay: { [Op.lte]: targetDen },
+        den_ngay: { [Op.gte]: targetTu },
+      },
+    });
+    if (overlapping) {
+      return res.status(400).json({
+        ok: false,
+        error: `Khoảng ngày (${targetTu} → ${targetDen}) bị chồng lấn với kỳ "${overlapping.ten_ky}" (${overlapping.tu_ngay} → ${overlapping.den_ngay})!`,
+      });
+    }
+
+    const oldTuNgay = ky.tu_ngay;
+    const oldDenNgay = ky.den_ngay;
+    const dateChanged = (tu_ngay && tu_ngay !== oldTuNgay) || (den_ngay && den_ngay !== oldDenNgay);
+
+    const updateFields = {
       ten_ky: ten_ky ? ten_ky.trim() : ky.ten_ky,
       tu_ngay: tu_ngay || ky.tu_ngay,
       den_ngay: den_ngay || ky.den_ngay,
       ngay_lap: ngay_lap || ky.ngay_lap,
       ghi_chu: ghi_chu !== undefined ? ghi_chu : ky.ghi_chu,
-    });
+    };
+
+    // Super Admin có thể can thiệp trạng thái kỳ
+    if (isSuperAdmin && trang_thai) {
+      updateFields.trang_thai = trang_thai;
+      if (trang_thai === 'dang_dien_ra') {
+        updateFields.ngay_chot = null;
+        updateFields.nguoi_chot_id = null;
+        updateFields.nguoi_chot_ten = null;
+        try {
+          const kyTruc = await KyTrucGV.findOne({ where: { tu_ngay: ky.tu_ngay } });
+          if (kyTruc && kyTruc.trang_thai === 'da_chot') {
+            await kyTruc.update({ trang_thai: 'dang_dien_ra', ngay_chot: null, nguoi_chot_id: null });
+          }
+        } catch (syncErr) {
+          console.warn('Lỗi đồng bộ KyTrucGV:', syncErr.message);
+        }
+      } else if (trang_thai === 'da_chot' && !ky.ngay_chot) {
+        updateFields.ngay_chot = new Date();
+        updateFields.nguoi_chot_id = req.user?.id || null;
+        updateFields.nguoi_chot_ten = req.user?.fullname || req.user?.username || 'Super Admin';
+      }
+    }
+
+    await ky.update(updateFields);
+
+    // Nếu kỳ đang diễn ra và ngày tháng thay đổi: tự động đồng bộ lại số liệu chấm công theo khoảng ngày mới
+    if (ky.trang_thai !== 'da_chot' && dateChanged) {
+      await ensureKyDataFromDb(ky);
+    }
+
+    await logThietLap(
+      'CAP_NHAT_KY',
+      `Cập nhật thông tin kỳ tổng hợp "${ky.ten_ky}" (ID: ${ky.id}, Trạng thái: ${ky.trang_thai})`,
+      req
+    );
 
     return res.json({ ok: true, data: ky });
   } catch (err) {
@@ -710,28 +723,46 @@ router.put('/ky-tong-hop/:id', ketoanOrAdmin, async (req, res) => {
   }
 });
 
-// DELETE /api/ketoan/ky-tong-hop/:id (Xóa kỳ nháp)
+// DELETE /api/ketoan/ky-tong-hop/:id (Xóa kỳ - Super Admin có quyền xóa mọi kỳ, cascade chi tiết)
 router.delete('/ky-tong-hop/:id', ketoanOrAdmin, async (req, res) => {
+  const t = await sequelize.transaction();
   try {
-    const ky = await KeToanKyTongHop.findByPk(req.params.id);
-    if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
-    if (ky.trang_thai === 'da_chot') {
-      return res.status(400).json({ ok: false, error: 'Không thể xóa kỳ đã chốt số liệu' });
+    const ky = await KeToanKyTongHop.findByPk(req.params.id, { transaction: t });
+    if (!ky) {
+      await t.rollback();
+      return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
     }
 
-    await ky.destroy();
-    await logThietLap('XOA_KY_TONG_HOP', `Xóa kỳ tổng hợp "${ky.ten_ky}" (ID: ${ky.id})`, req);
-    return res.json({ ok: true, message: 'Đã xóa kỳ tổng hợp thành công' });
+    const isSuperAdmin = isSuperAdminUser(req);
+    if (ky.trang_thai === 'da_chot' && !isSuperAdmin) {
+      await t.rollback();
+      return res.status(403).json({ ok: false, error: 'Kỳ đã chốt sổ. Chỉ Quản trị viên cấp cao (Super Admin) mới có quyền xóa kỳ này.' });
+    }
+
+    // Xóa liên hoàn (cascade) dữ liệu con tránh lỗi ràng buộc khóa ngoại
+    await KeToanThanhToanChiTiet.destroy({ where: { ky_id: ky.id }, transaction: t });
+    await KeToanChiTietKhoanChi.destroy({ where: { ky_id: ky.id }, transaction: t });
+    await KeToanNguoiNhan.destroy({ where: { ky_id: ky.id }, transaction: t });
+    await ky.destroy({ transaction: t });
+
+    await t.commit();
+    await logThietLap('XOA_KY_TONG_HOP', `Xóa kỳ tổng hợp "${ky.ten_ky}" (ID: ${ky.id}, Trạng thái: ${ky.trang_thai}) và toàn bộ dữ liệu liên quan`, req);
+    return res.json({ ok: true, message: `Đã xóa thành công kỳ "${ky.ten_ky}" cùng toàn bộ dữ liệu liên quan.` });
   } catch (err) {
+    await t.rollback();
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 // ── Helper cộng ngày ─────────────────────────────────────────────────────────────
 function addDays(dateStr, n) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split('T')[0];
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
 }
 
 // ── Helper sắp xếp tiếng Việt theo Họ Tên ──────────────────────────────────────────
@@ -761,30 +792,30 @@ const sortGvByName = (list) => {
 // ── Danh sách nhân sự & mức phụ cấp cơ sở khớp Báo cáo Thống kê ───────────────
 const BASELINE_STAFF_ALLOWANCES = [
   { ho_ten: 'Trần Bá Lâm', cap_nhat_tt: 700000, so_tk: '0397854806' },
-  { ho_ten: 'Trần Nhật Tân', thiet_bi: 1600000, so_tk: '060146415418' },
+  { ho_ten: 'Trần Nhật Tân', so_tk: '060146415418' },
   { ho_ten: 'Phan Thanh Nhật', so_tk: '0931158262' },
-  { ho_ten: 'Bùi Thanh Toàn', gs_an: 1600000, so_tk: '050128831239' },
+  { ho_ten: 'Bùi Thanh Toàn', so_tk: '050128831239' },
   { ho_ten: 'Lê Hoàng Hà', so_tk: '0908345603' },
-  { ho_ten: 'Đỗ Văn Thương', gs_an: 1600000, so_tk: '0342184452' },
-  { ho_ten: 'Đỗ Ngọc Bích Vân', gs_an: 1600000, so_tk: '060297153784' },
+  { ho_ten: 'Đỗ Văn Thương', so_tk: '0342184452' },
+  { ho_ten: 'Đỗ Ngọc Bích Vân', so_tk: '060297153784' },
   { ho_ten: 'Đặng Thị Yến', so_tk: '060146446712' },
   { ho_ten: 'Phạm Thị Thanh Hà', tiep_nhan_vd: 800000, so_tk: '0903832423' },
   { ho_ten: 'Đào Thị Cẩm Hạnh', so_tk: '060146399773' },
-  { ho_ten: 'Trần Nhật Thiên Thanh', vs_bv: 2000000, so_tk: '060310096671' },
+  { ho_ten: 'Trần Nhật Thiên Thanh', vs_bv: 2000000, cap_nhat_tt: 1000000, so_tk: '060310096671' },
   { ho_ten: 'Trần Thị Kim Thoại', so_tk: '0388706578' },
   { ho_ten: 'Đinh Thị Tuyết Lan', vs_bv: 2000000, so_tk: '060253956685' },
   { ho_ten: 'Mai Thị Tường Vi', so_tk: '0935595079' },
-  { ho_ten: 'Lê Thị Huyền Nhung', gs_an: 1400000, so_tk: '0586613647' },
+  { ho_ten: 'Lê Thị Huyền Nhung', so_tk: '0586613647' },
   { ho_ten: 'Cao Thị Mai Huệ', so_tk: '060275595589' },
   { ho_ten: 'Bùi Phùng Đức Anh', so_tk: '060183474475' },
   { ho_ten: 'Hoàng Thanh Thủy', so_tk: '0387574502' },
   { ho_ten: 'Trần Thị Hồng Cẩm', cap_nhat_tt: 500000, so_tk: '060325382506' },
-  { ho_ten: 'Vũ Quốc Phong', gs_ban_tru: 2750000, so_tk: '123698898888' },
-  { ho_ten: 'Huỳnh Đức Vịnh', gs_ban_tru: 2250000, so_tk: '0909930164' },
-  { ho_ten: 'Lý Công Thành', gs_an: 1300000, so_tk: '060326149384' },
+  { ho_ten: 'Vũ Quốc Phong', so_tk: '123698898888' },
+  { ho_ten: 'Huỳnh Đức Vịnh', so_tk: '0909930164' },
+  { ho_ten: 'Lý Công Thành', so_tk: '060326149384' },
   { ho_ten: 'Nguyễn Thị Nhung', vs_bv: 2000000, so_tk: '060962014341' },
   { ho_ten: 'Nguyễn Ngọc Cầm', vs_bv: 800000, so_tk: '06014646453' },
-  { ho_ten: 'Mai Quỳnh Châu', bt_an: 300000, gs_an: 1600000, y_te: 770000, so_tk: '060326378898' },
+  { ho_ten: 'Mai Quỳnh Châu', so_tk: '060326378898' },
   { ho_ten: 'Huỳnh Duy Khoa', so_tk: '060818237416' },
   { ho_ten: 'Bùi Xuân Kim Sa', so_tk: '' },
   { ho_ten: 'Hồ Quang Thịnh', so_tk: '' },
@@ -827,6 +858,14 @@ async function fetchAttendanceSourceData(startDate, endDate) {
   if (dmMap['gs_ban_tru']?.don_gia_mac_dinh && parseFloat(dmMap['gs_ban_tru'].don_gia_mac_dinh) > 0) {
     donGiaGsBanTru = parseFloat(dmMap['gs_ban_tru'].don_gia_mac_dinh);
   }
+  let donGiaThietBi = 100000;
+  if (dmMap['thiet_bi']?.don_gia_mac_dinh && parseFloat(dmMap['thiet_bi'].don_gia_mac_dinh) > 0) {
+    donGiaThietBi = parseFloat(dmMap['thiet_bi'].don_gia_mac_dinh);
+  }
+  let donGiaGsAn = 100000;
+  if (dmMap['gs_an']?.don_gia_mac_dinh && parseFloat(dmMap['gs_an'].don_gia_mac_dinh) > 0) {
+    donGiaGsAn = parseFloat(dmMap['gs_an'].don_gia_mac_dinh);
+  }
 
   // 1. Phân công trực ăn - Chỉ lấy các cột cần thiết từ CSDL
   const phanCongAn = await PhanCongTrucGV.findAll({
@@ -835,7 +874,7 @@ async function fetchAttendanceSourceData(startDate, endDate) {
       loai_truc: 0,
       xac_nhan_truc: { [Op.ne]: false },
     },
-    attributes: ['id', 'ngay', 'loai_truc', 'ma_gv_id', 'ma_gv_truc_thay_id', 'ten_gv_truc_thay'],
+    attributes: ['id', 'ngay', 'loai_truc', 'ma_gv_id', 'ma_gv_truc_thay_id', 'ten_gv_truc_thay', 'nhiem_vu'],
     include: [
       { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
       { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
@@ -871,6 +910,7 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     seenAn.add(key);
 
     const normKey = name.trim().toLowerCase();
+    const isGsAn = pc.nhiem_vu === 1 || nhiemVu === 1;
     if (!anByGv[normKey]) {
       anByGv[normKey] = {
         nhan_su_id: typeof gvId === 'number' ? gvId : null,
@@ -878,11 +918,20 @@ async function fetchAttendanceSourceData(startDate, endDate) {
         so_tai_khoan: stk,
         nhiem_vu: nhiemVu,
         so_ca_an: 0,
-        tien_an: 0,
+        so_ca_bt_an: 0,
+        so_ca_gs_an: 0,
+        tien_bt_an: 0,
+        tien_gs_an: 0,
       };
     }
     anByGv[normKey].so_ca_an += 1;
-    anByGv[normKey].tien_an += donGiaAn;
+    if (isGsAn) {
+      anByGv[normKey].so_ca_gs_an += 1;
+      anByGv[normKey].tien_gs_an += donGiaGsAn || donGiaAn;
+    } else {
+      anByGv[normKey].so_ca_bt_an += 1;
+      anByGv[normKey].tien_bt_an += donGiaAn;
+    }
   });
 
   // 2. Phân công trực ngủ - Chỉ lấy các cột cần thiết từ CSDL
@@ -973,6 +1022,15 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     }
   });
 
+  // Bổ sung STK & ID từ CSDL giáo viên cho những người có trong danh sách
+  Object.keys(personMap).forEach((clean) => {
+    const dbT = dbTeacherMap[clean];
+    if (dbT) {
+      if (!personMap[clean].nhan_su_id) personMap[clean].nhan_su_id = dbT.id;
+      if (!personMap[clean].so_tai_khoan && dbT.so_tai_khoan) personMap[clean].so_tai_khoan = dbT.so_tai_khoan;
+    }
+  });
+
   // 5. Tính toán chi tiết 9 khoản chi cho từng người
   const calculatedStaff = Object.values(personMap).map((p) => {
     const clean = p.ho_ten.trim().toLowerCase();
@@ -1001,35 +1059,36 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     // 4. Chăm sóc Y tế (y_te): Châu là Y tế (Số ngày bán trú x 70.000đ)
     let y_te = 0;
     if (isMaiQuynhChau) {
-      y_te = soNgayBanTru > 0 ? soNgayBanTru * donGiaYTe : (base.y_te || 770000);
+      y_te = soNgayBanTru > 0 ? soNgayBanTru * donGiaYTe : (base.y_te || 1400000);
     }
 
     // 5. Bán trú ăn (bt_an)
     let bt_an = 0;
     if (isMaiQuynhChau) {
-      bt_an = 300000;
+      bt_an = 0;
     } else if (anInfo) {
-      bt_an = anInfo.nhiem_vu === 1 ? 0 : anInfo.tien_an;
+      bt_an = anInfo.tien_bt_an || 0;
     } else {
       bt_an = base.bt_an || 0;
     }
 
-    // 6. Cập nhật thông tin (cap_nhat_tt): chỉ Hồng Cẩm (500k) và Bá Lâm (700k) là định kỳ
+    // 6. Cập nhật thông tin (cap_nhat_tt)
     let cap_nhat_tt = base.cap_nhat_tt || 0;
     if (!cap_nhat_tt) {
       if (isHongCam) cap_nhat_tt = 500000;
       else if (isBaLam) cap_nhat_tt = 700000;
+      else if (isThienThanh) cap_nhat_tt = 1000000;
     }
 
-    // 7. Thiết bị (thiet_bi): Trần Nhật Tân là thiết bị (16 ca x 100k = 1.600.000đ)
-    const thiet_bi = isNhatTan ? 1600000 : 0;
+    // 7. Thiết bị (thiet_bi): Trần Nhật Tân là thiết bị (Số ngày bán trú x đơn giá thiết lập)
+    const thiet_bi = isNhatTan ? (soNgayBanTru > 0 ? soNgayBanTru * donGiaThietBi : (base.thiet_bi || 1600000)) : 0;
 
     // 8. Giám sát ăn (gs_an)
     let gs_an = 0;
     if (isMaiQuynhChau) {
-      gs_an = (anInfo && anInfo.tien_an) ? anInfo.tien_an : (base.gs_an || 1600000);
-    } else if (anInfo && anInfo.nhiem_vu === 1) {
-      gs_an = anInfo.tien_an;
+      gs_an = (anInfo && anInfo.tien_gs_an) ? anInfo.tien_gs_an : (soNgayBanTru > 0 ? soNgayBanTru * donGiaGsAn : (base.gs_an || 1600000));
+    } else if (anInfo && anInfo.tien_gs_an > 0) {
+      gs_an = anInfo.tien_gs_an;
     } else {
       gs_an = base.gs_an || 0;
     }
@@ -1037,9 +1096,9 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     // 9. Giám sát bán trú (gs_ban_tru)
     let gs_ban_tru = 0;
     if (isVuQuocPhong) {
-      gs_ban_tru = soNgayBanTru > 0 ? soNgayBanTru * donGiaGsBanTru : 2750000;
+      gs_ban_tru = soNgayBanTru > 0 ? soNgayBanTru * donGiaGsBanTru : 4500000;
     } else if (isHuynhDucVinh) {
-      gs_ban_tru = 2250000;
+      gs_ban_tru = 9 * donGiaGsBanTru;
     } else {
       gs_ban_tru = base.gs_ban_tru || 0;
     }
@@ -1061,7 +1120,8 @@ async function fetchAttendanceSourceData(startDate, endDate) {
       },
       counts: {
         so_ca_ngu: nguInfo?.so_ca_ngu || 0,
-        so_ca_an: anInfo?.so_ca_an || 0,
+        so_ca_an: anInfo?.so_ca_bt_an || 0,
+        so_ca_gs_an: anInfo?.so_ca_gs_an || (isMaiQuynhChau ? soNgayBanTru : 0),
         so_ngay_ban_tru: soNgayBanTru,
       },
     };
@@ -1076,6 +1136,8 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     donGiaNgu,
     donGiaYTe,
     donGiaGsBanTru,
+    donGiaThietBi,
+    donGiaGsAn,
     soNgayBanTru,
   };
 }
@@ -1084,12 +1146,46 @@ async function fetchAttendanceSourceData(startDate, endDate) {
 async function ensureKyDataFromDb(ky) {
   if (!ky || ky.trang_thai === 'da_chot') return;
 
-  const { sortedStaff } = await fetchAttendanceSourceData(ky.tu_ngay, ky.den_ngay);
+  const { sortedStaff, donGiaAn, donGiaNgu, donGiaYTe, donGiaGsBanTru, donGiaThietBi, donGiaGsAn, soNgayBanTru } = await fetchAttendanceSourceData(ky.tu_ngay, ky.den_ngay);
   const allCategories = await KeToanDanhMucKhoanChi.findAll({ where: { kich_hoat: true } });
   const catMap = {};
   allCategories.forEach((c) => {
     catMap[c.ma_khoan_chi] = c;
   });
+
+  // Tìm kỳ trước gần nhất để kế thừa các khoản định kỳ
+  const priorKy = await KeToanKyTongHop.findOne({
+    where: {
+      id: { [Op.ne]: ky.id },
+      [Op.or]: [
+        { den_ngay: { [Op.lte]: ky.tu_ngay } },
+        { id: { [Op.lt]: ky.id } },
+      ],
+    },
+    order: [['den_ngay', 'DESC'], ['id', 'DESC']],
+    include: [
+      {
+        model: KeToanNguoiNhan,
+        as: 'danh_sach_nguoi_nhan',
+        include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
+      },
+    ],
+  });
+
+  const prevKyDetailsByPerson = {};
+  if (priorKy && priorKy.danh_sach_nguoi_nhan) {
+    priorKy.danh_sach_nguoi_nhan.forEach((pnn) => {
+      const cName = pnn.ho_ten.trim().toLowerCase();
+      if (!prevKyDetailsByPerson[cName]) {
+        prevKyDetailsByPerson[cName] = {};
+      }
+      (pnn.chi_tiet_khoan_chi || []).forEach((pct) => {
+        if (!prevKyDetailsByPerson[cName][pct.ma_khoan_chi]) {
+          prevKyDetailsByPerson[cName][pct.ma_khoan_chi] = pct;
+        }
+      });
+    });
+  }
 
   const existingNguoiNhans = await KeToanNguoiNhan.findAll({
     where: { ky_id: ky.id },
@@ -1097,13 +1193,21 @@ async function ensureKyDataFromDb(ky) {
   });
 
   const nnByName = {};
+  const ctMapByNnAndCol = new Map();
   existingNguoiNhans.forEach((nn) => {
     nnByName[nn.ho_ten.trim().toLowerCase()] = nn;
+    (nn.chi_tiet_khoan_chi || []).forEach((ct) => {
+      ctMapByNnAndCol.set(`${nn.id}_${ct.ma_khoan_chi}`, ct);
+    });
   });
+
+  const toCreateCts = [];
 
   for (let idx = 0; idx < sortedStaff.length; idx++) {
     const person = sortedStaff[idx];
     const clean = person.ho_ten.trim().toLowerCase();
+    const isMaiQuynhChau = clean.includes('mai quỳnh châu') || clean.includes('quỳnh châu') || clean === 'châu' || clean.endsWith(' châu');
+    const isNhatTan = clean.includes('nhật tân') || clean.includes('trần nhật tân');
     let nn = nnByName[clean];
 
     if (!nn) {
@@ -1120,60 +1224,122 @@ async function ensureKyDataFromDb(ky) {
       });
       nnByName[clean] = nn;
     } else {
-      const updateFields = { stt: idx + 1 };
+      const updateFields = {};
+      if (nn.stt !== idx + 1) updateFields.stt = idx + 1;
       if (person.so_tai_khoan && !nn.so_tai_khoan) {
         updateFields.so_tai_khoan = String(person.so_tai_khoan).trim();
       }
       if (person.nhan_su_id && !nn.nhan_su_id) {
         updateFields.nhan_su_id = person.nhan_su_id;
       }
-      await nn.update(updateFields);
+      if (Object.keys(updateFields).length > 0) {
+        await nn.update(updateFields);
+      }
     }
 
-    for (const maKhoanChi of Object.keys(person.amounts)) {
+    for (const maKhoanChi of Object.keys(catMap)) {
       const cat = catMap[maKhoanChi];
-      if (!cat) continue;
+      const prevCt = prevKyDetailsByPerson[clean]?.[maKhoanChi];
+      let ct = ctMapByNnAndCol.get(`${nn.id}_${maKhoanChi}`);
 
-      const newTienNguon = person.amounts[maKhoanChi] || 0;
-      let ct = await KeToanChiTietKhoanChi.findOne({
-        where: { nguoi_nhan_id: nn.id, ma_khoan_chi: maKhoanChi },
-      });
+      // Nếu ô đã được sửa thủ công trong kỳ này, giữ nguyên (không ghi đè)
+      if (ct && (ct.nguon_cap_nhat === 'manual' || parseFloat(ct.tien_dieu_chinh) !== 0)) {
+        continue;
+      }
+
+      let soNgay = 0;
+      let donGia = parseFloat(cat.don_gia_mac_dinh) || 0;
+      let tienNguon = 0;
+      let tienNhap = 0;
+      let tanSuat = cat.tan_suat || 'dinh_ky';
+
+      if (maKhoanChi === 'truc_phong') {
+        donGia = donGiaNgu || parseFloat(cat.don_gia_mac_dinh) || 180000;
+        soNgay = person.counts.so_ca_ngu || 0;
+        tienNguon = soNgay * donGia;
+      } else if (maKhoanChi === 'bt_an') {
+        donGia = donGiaAn || parseFloat(cat.don_gia_mac_dinh) || 100000;
+        tienNguon = person.amounts.bt_an || 0;
+        soNgay = isMaiQuynhChau ? 0 : (person.counts.so_ca_an || (tienNguon > 0 && donGia > 0 ? Math.round(tienNguon / donGia) : 0));
+      } else if (maKhoanChi === 'gs_an') {
+        donGia = donGiaGsAn || parseFloat(cat.don_gia_mac_dinh) || 100000;
+        tienNguon = person.amounts.gs_an || 0;
+        soNgay = isMaiQuynhChau
+          ? (soNgayBanTru || 0)
+          : (person.counts.so_ca_gs_an || (tienNguon > 0 && donGia > 0 ? Math.round(tienNguon / donGia) : 0));
+        if (tienNguon === 0 && soNgay > 0) tienNguon = soNgay * donGia;
+      } else if (maKhoanChi === 'thiet_bi') {
+        donGia = donGiaThietBi || parseFloat(cat.don_gia_mac_dinh) || 100000;
+        soNgay = isNhatTan ? (soNgayBanTru > 0 ? soNgayBanTru : 0) : 0;
+        tienNguon = person.amounts.thiet_bi || (soNgay * donGia);
+        if (tienNguon > 0 && soNgay === 0 && donGia > 0) soNgay = Math.round(tienNguon / donGia);
+      } else if (maKhoanChi === 'y_te') {
+        donGia = donGiaYTe || parseFloat(cat.don_gia_mac_dinh) || 70000;
+        soNgay = isMaiQuynhChau ? (soNgayBanTru > 0 ? soNgayBanTru : 0) : 0;
+        tienNguon = person.amounts.y_te || (soNgay * donGia);
+        if (tienNguon > 0 && soNgay === 0 && donGia > 0) soNgay = Math.round(tienNguon / donGia);
+      } else if (maKhoanChi === 'gs_ban_tru') {
+        donGia = donGiaGsBanTru || parseFloat(cat.don_gia_mac_dinh) || 250000;
+        if (clean.includes('đức vịnh')) {
+          soNgay = 9;
+          tienNguon = 9 * donGia;
+        } else if (clean.includes('quốc phong')) {
+          soNgay = soNgayBanTru > 0 ? soNgayBanTru : 0;
+          tienNguon = soNgay * donGia;
+        } else {
+          tienNguon = person.amounts.gs_ban_tru || 0;
+          if (tienNguon > 0 && soNgay === 0 && donGia > 0) soNgay = Math.round(tienNguon / donGia);
+        }
+      } else {
+        // Cột trực tiếp (vs_bv, tiep_nhan_vd, cap_nhat_tt)
+        tienNguon = person.amounts[maKhoanChi] || 0;
+        tienNhap = tienNguon;
+      }
+
+      soNgay = Math.round(soNgay || 0);
+      const thanhTien = tienNhap > 0 ? tienNhap : tienNguon;
 
       if (ct) {
-        const tienDieuChinh = parseFloat(ct.tien_dieu_chinh) || 0;
-        await ct.update({
-          tien_nguon: newTienNguon,
-          thanh_tien: newTienNguon + tienDieuChinh,
-          so_ngay:
-            maKhoanChi === 'truc_phong'
-              ? person.counts.so_ca_ngu
-              : maKhoanChi === 'y_te' || maKhoanChi === 'gs_ban_tru'
-              ? person.counts.so_ngay_ban_tru
-              : ct.so_ngay,
-          nguon_cap_nhat: 'csdl_tu_dong',
-        });
-      } else if (newTienNguon > 0) {
-        await KeToanChiTietKhoanChi.create({
+        if (
+          ct.so_ngay !== soNgay ||
+          parseFloat(ct.don_gia) !== donGia ||
+          parseFloat(ct.tien_nguon) !== tienNguon ||
+          parseFloat(ct.tien_nhap) !== tienNhap ||
+          parseFloat(ct.thanh_tien) !== thanhTien ||
+          ct.tan_suat !== tanSuat
+        ) {
+          await ct.update({
+            so_ngay: soNgay,
+            don_gia: donGia,
+            tien_nguon: tienNguon,
+            tien_nhap: tienNhap,
+            thanh_tien: thanhTien,
+            tan_suat: tanSuat,
+            nguon_cap_nhat: 'csdl_tu_dong',
+          });
+        }
+      } else if (thanhTien > 0 || soNgay > 0) {
+        toCreateCts.push({
           nguoi_nhan_id: nn.id,
           ky_id: ky.id,
           khoan_chi_id: cat.id,
           ma_khoan_chi: maKhoanChi,
           loai_tinh: cat.loai_tinh,
-          so_ngay:
-            maKhoanChi === 'truc_phong'
-              ? person.counts.so_ca_ngu
-              : maKhoanChi === 'y_te' || maKhoanChi === 'gs_ban_tru'
-              ? person.counts.so_ngay_ban_tru
-              : 0,
-          don_gia: parseFloat(cat.don_gia_mac_dinh) || 0,
-          tien_nguon: newTienNguon,
-          tien_nhap: 0,
+          so_ngay: soNgay,
+          don_gia: donGia,
+          tien_nguon: tienNguon,
+          tien_nhap: tienNhap,
           tien_dieu_chinh: 0,
-          thanh_tien: newTienNguon,
+          thanh_tien: thanhTien,
+          tan_suat: tanSuat,
           nguon_cap_nhat: 'csdl_tu_dong',
         });
       }
     }
+  }
+
+  if (toCreateCts.length > 0) {
+    await KeToanChiTietKhoanChi.bulkCreate(toCreateCts);
   }
 
   await recalculateKyTotals(ky.id);
@@ -1268,6 +1434,14 @@ router.post('/ky-tong-hop/:id/dong-bo-nguon', ketoanOrAdmin, async (req, res) =>
     // Thực hiện commit đồng bộ vào CSDL (bảo toàn các khoản điều chỉnh và giữ nguyên vẹn)
     const t = await sequelize.transaction();
     try {
+      const ctMapByNnAndCol = new Map();
+      existingNguoiNhans.forEach((enn) => {
+        (enn.chi_tiet_khoan_chi || []).forEach((ct) => {
+          ctMapByNnAndCol.set(`${enn.id}_${ct.ma_khoan_chi}`, ct);
+        });
+      });
+      const toCreateCts = [];
+
       for (let idx = 0; idx < sortedStaff.length; idx++) {
         const person = sortedStaff[idx];
         const clean = person.ho_ten.trim().toLowerCase();
@@ -1306,52 +1480,54 @@ router.post('/ky-tong-hop/:id/dong-bo-nguon', ketoanOrAdmin, async (req, res) =>
           if (!cat) continue;
 
           const newTienNguon = person.amounts[maKhoanChi] || 0;
-          let ct = await KeToanChiTietKhoanChi.findOne({
-            where: { nguoi_nhan_id: nn.id, ma_khoan_chi: maKhoanChi },
-            transaction: t,
-          });
+          let ct = ctMapByNnAndCol.get(`${nn.id}_${maKhoanChi}`);
+
+          const newSoNgay =
+            maKhoanChi === 'truc_phong'
+              ? person.counts.so_ca_ngu
+              : maKhoanChi === 'y_te' || maKhoanChi === 'gs_ban_tru'
+              ? person.counts.so_ngay_ban_tru
+              : (ct ? ct.so_ngay : 0);
 
           if (ct) {
             const tienDieuChinh = parseFloat(ct.tien_dieu_chinh) || 0;
-            await ct.update(
-              {
-                tien_nguon: newTienNguon,
-                thanh_tien: newTienNguon + tienDieuChinh,
-                so_ngay:
-                  maKhoanChi === 'truc_phong'
-                    ? person.counts.so_ca_ngu
-                    : maKhoanChi === 'y_te' || maKhoanChi === 'gs_ban_tru'
-                    ? person.counts.so_ngay_ban_tru
-                    : ct.so_ngay,
-                nguon_cap_nhat: 'dong_bo_bao_cao',
-              },
-              { transaction: t }
-            );
+            const newThanhTien = newTienNguon + tienDieuChinh;
+            if (
+              parseFloat(ct.tien_nguon) !== newTienNguon ||
+              parseFloat(ct.thanh_tien) !== newThanhTien ||
+              ct.so_ngay !== newSoNgay
+            ) {
+              await ct.update(
+                {
+                  tien_nguon: newTienNguon,
+                  thanh_tien: newThanhTien,
+                  so_ngay: newSoNgay,
+                  nguon_cap_nhat: 'dong_bo_bao_cao',
+                },
+                { transaction: t }
+              );
+            }
           } else if (newTienNguon > 0) {
-            await KeToanChiTietKhoanChi.create(
-              {
-                nguoi_nhan_id: nn.id,
-                ky_id: ky.id,
-                khoan_chi_id: cat.id,
-                ma_khoan_chi: maKhoanChi,
-                loai_tinh: cat.loai_tinh,
-                so_ngay:
-                  maKhoanChi === 'truc_phong'
-                    ? person.counts.so_ca_ngu
-                    : maKhoanChi === 'y_te' || maKhoanChi === 'gs_ban_tru'
-                    ? person.counts.so_ngay_ban_tru
-                    : 0,
-                don_gia: parseFloat(cat.don_gia_mac_dinh) || 0,
-                tien_nguon: newTienNguon,
-                tien_nhap: 0,
-                tien_dieu_chinh: 0,
-                thanh_tien: newTienNguon,
-                nguon_cap_nhat: 'dong_bo_bao_cao',
-              },
-              { transaction: t }
-            );
+            toCreateCts.push({
+              nguoi_nhan_id: nn.id,
+              ky_id: ky.id,
+              khoan_chi_id: cat.id,
+              ma_khoan_chi: maKhoanChi,
+              loai_tinh: cat.loai_tinh,
+              so_ngay: newSoNgay,
+              don_gia: parseFloat(cat.don_gia_mac_dinh) || 0,
+              tien_nguon: newTienNguon,
+              tien_nhap: 0,
+              tien_dieu_chinh: 0,
+              thanh_tien: newTienNguon,
+              nguon_cap_nhat: 'dong_bo_bao_cao',
+            });
           }
         }
+      }
+
+      if (toCreateCts.length > 0) {
+        await KeToanChiTietKhoanChi.bulkCreate(toCreateCts, { transaction: t });
       }
 
       await recalculateKyTotals(ky.id, t);
@@ -1543,9 +1719,10 @@ const handleUpdateChiTietKhoan = async (req, res) => {
       await t.rollback();
       return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
     }
-    if (ky.trang_thai === 'da_chot') {
+    const isSuperAdmin = isSuperAdminUser(req);
+    if (ky.trang_thai === 'da_chot' && !isSuperAdmin) {
       await t.rollback();
-      return res.status(400).json({ ok: false, error: 'Kỳ đã chốt, không thể chỉnh sửa số tiền' });
+      return res.status(400).json({ ok: false, error: 'Kỳ đã chốt, chỉ Quản trị viên cấp cao (Super Admin) mới có quyền chỉnh sửa số tiền' });
     }
 
     const targetNnId = req.body.nguoi_nhan_id || req.params.nguoiNhanId;
@@ -1584,44 +1761,40 @@ const handleUpdateChiTietKhoan = async (req, res) => {
     const cleanName = (nn.ho_ten || '').trim().toLowerCase();
     const isHuynhDucVinh = cleanName.includes('huỳnh đức vịnh') || cleanName.includes('đức vịnh');
 
-    // 5 cột khóa tuyệt đối với mọi nhân sự (kể cả Huỳnh Đức Vịnh)
-    const STRICT_LOCKED_CATEGORIES = ['truc_phong', 'y_te', 'bt_an', 'thiet_bi', 'gs_an'];
-    if (STRICT_LOCKED_CATEGORIES.includes(targetMaKhoanChi)) {
+    // 3 cột khóa bảo vệ từ CSDL chấm công thực tế (Super Admin có toàn quyền can thiệp khi có sai sót)
+    const STRICT_LOCKED_CATEGORIES = ['truc_phong', 'bt_an', 'gs_an'];
+    if (STRICT_LOCKED_CATEGORIES.includes(targetMaKhoanChi) && !isSuperAdmin) {
       await t.rollback();
-      let errorMsg = `Khoản chi "${dm?.ten_khoan_chi || targetMaKhoanChi}" được bảo vệ cố định từ CSDL nghiệp vụ, tuyệt đối không được chỉnh sửa.`;
-      if (targetMaKhoanChi === 'thiet_bi') {
-        errorMsg = 'Khoản "Trực thiết bị" là nhiệm vụ phân công cố định cho Trần Nhật Tân (16 ca × 100.000đ = 1.600.000đ), không thể chỉnh sửa.';
-      } else if (targetMaKhoanChi === 'y_te') {
-        errorMsg = 'Khoản "Y tế" là nhiệm vụ phân công cố định cho nhân viên Y tế Mai Quỳnh Châu (Số ngày bán trú × 70.000đ), không thể chỉnh sửa.';
-      } else if (targetMaKhoanChi === 'truc_phong') {
-        errorMsg = 'Khoản "Trực phòng (Ngủ 180k)" được tự động đồng bộ từ CSDL chấm công ngủ thực tế, không thể chỉnh sửa.';
+      let errorMsg = `Khoản chi "${dm?.ten_khoan_chi || targetMaKhoanChi}" được bảo vệ cố định từ CSDL chấm công thực tế, chỉ Quản trị viên cấp cao mới có quyền can thiệp.`;
+      if (targetMaKhoanChi === 'truc_phong') {
+        errorMsg = 'Khoản "Trực phòng (Ngủ 180k)" được tự động đồng bộ từ CSDL chấm công ngủ thực tế, chỉ Quản trị viên cấp cao mới có thể chỉnh sửa.';
       } else if (targetMaKhoanChi === 'bt_an') {
-        errorMsg = 'Khoản "Bán trú ăn (KT 100k)" được tự động đồng bộ từ CSDL chấm công ăn thực tế, không thể chỉnh sửa.';
+        errorMsg = 'Khoản "Bán trú ăn (KT 100k)" được tự động đồng bộ từ CSDL chấm công ăn thực tế, chỉ Quản trị viên cấp cao mới có thể chỉnh sửa.';
       } else if (targetMaKhoanChi === 'gs_an') {
-        errorMsg = 'Khoản "Giám sát ăn (ĐG 100k)" được tự động đồng bộ từ CSDL chấm công giám sát thực tế, không thể chỉnh sửa.';
+        errorMsg = 'Khoản "Giám sát ăn (ĐG 100k)" được tự động đồng bộ từ CSDL chấm công giám sát thực tế, chỉ Quản trị viên cấp cao mới có thể chỉnh sửa.';
       }
       return res.status(400).json({ ok: false, error: errorMsg });
     }
 
-    // Riêng khoản gs_ban_tru: chỉ cho phép Huỳnh Đức Vịnh chỉnh sửa theo phân công
-    if (targetMaKhoanChi === 'gs_ban_tru' && !isHuynhDucVinh) {
+    // Riêng khoản gs_ban_tru: cho phép Huỳnh Đức Vịnh hoặc Super Admin chỉnh sửa
+    if (targetMaKhoanChi === 'gs_ban_tru' && !isHuynhDucVinh && !isSuperAdmin) {
       await t.rollback();
       return res.status(400).json({
         ok: false,
-        error: 'Khoản "Giám sát bán trú" được tính tự động từ CSDL nghiệp vụ, chỉ cho phép chỉnh sửa với nhân sự được phân công đặc biệt (Huỳnh Đức Vịnh).',
+        error: 'Khoản "Giám sát bán trú" được tính tự động từ CSDL nghiệp vụ, chỉ cho phép chỉnh sửa với nhân sự được phân công đặc biệt (Huỳnh Đức Vịnh) hoặc Quản trị viên cấp cao.',
       });
     }
 
-    if (!isHuynhDucVinh && loaiTinh.startsWith('nguon_')) {
+    if (!isHuynhDucVinh && !isSuperAdmin && loaiTinh.startsWith('nguon_')) {
       await t.rollback();
       return res.status(400).json({
         ok: false,
-        error: `Khoản chi "${dm?.ten_khoan_chi || targetMaKhoanChi}" được tự động đồng bộ từ CSDL nghiệp vụ (Chấm công / Phân công trực), cố định không được chỉnh sửa.`,
+        error: `Khoản chi "${dm?.ten_khoan_chi || targetMaKhoanChi}" được tự động đồng bộ từ CSDL nghiệp vụ, chỉ Quản trị viên cấp cao mới có quyền can thiệp.`,
       });
     }
 
     const effectiveDonGia = don_gia !== undefined ? parseFloat(don_gia) || 0 : (ct?.don_gia || parseFloat(dm?.don_gia_mac_dinh) || 0);
-    const effectiveSoNgay = so_ngay !== undefined ? parseFloat(so_ngay) || 0 : (ct?.so_ngay || 0);
+    const effectiveSoNgay = so_ngay !== undefined ? Math.round(parseFloat(so_ngay) || 0) : Math.round(ct?.so_ngay || 0);
     const effectiveTienNhap = tien_nhap !== undefined ? parseFloat(tien_nhap) || 0 : (ct?.tien_nhap || 0);
     const effectiveDieuChinh = tien_dieu_chinh !== undefined ? parseFloat(tien_dieu_chinh) || 0 : (ct?.tien_dieu_chinh || 0);
     const effectiveTienNguon = ct ? parseFloat(ct.tien_nguon) || 0 : 0;
@@ -1881,12 +2054,39 @@ router.get('/ky-tong-hop/:id/preview-chot', ketoanViewOrAdmin, async (req, res) 
     }
 
     const { sortedStaff } = await fetchAttendanceSourceData(tuNgay, denNgay);
-    const dmList = await KeToanDanhMucKhoanChi.findAll({ where: { kich_hoat: true } });
+    const dmList = await KeToanDanhMucKhoanChi.findAll({ where: { kich_hoat: true }, order: [['thu_tu_hien_thi', 'ASC']] });
+
+    // Đọc các khoản chi tiết đã lưu trong CSDL của kỳ (như manual override, khoản 1 lần, điều chỉnh) để số tiền khớp 100%
+    const existingNguoiNhans = await KeToanNguoiNhan.findAll({
+      where: { ky_id: ky.id },
+      include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
+    });
+    const nnByName = {};
+    existingNguoiNhans.forEach((nn) => {
+      nnByName[nn.ho_ten.trim().toLowerCase()] = nn;
+    });
+
+    const STRICT_LOCKED_COLS = ['truc_phong', 'bt_an', 'gs_an'];
 
     let tongTien = 0;
     sortedStaff.forEach((p) => {
+      const clean = p.ho_ten.trim().toLowerCase();
+      const existingNn = nnByName[clean];
+      const isHuynhDucVinh = clean.includes('huỳnh đức vịnh') || clean.includes('đức vịnh');
+
       dmList.forEach((col) => {
-        tongTien += (p.amounts[col.ma_khoan_chi] || 0);
+        let amt = p.amounts[col.ma_khoan_chi] || 0;
+        const isStrictLocked = STRICT_LOCKED_COLS.includes(col.ma_khoan_chi);
+        const isHuynhDucVinhGs = isHuynhDucVinh && col.ma_khoan_chi === 'gs_ban_tru';
+        const existingCt = existingNn?.chi_tiet_khoan_chi?.find((c) => c.ma_khoan_chi === col.ma_khoan_chi);
+
+        if (!isStrictLocked && existingCt) {
+          const tienDieuChinh = parseFloat(existingCt.tien_dieu_chinh) || 0;
+          if (isHuynhDucVinhGs || existingCt.nguon_cap_nhat === 'manual' || tienDieuChinh !== 0 || (existingCt.thanh_tien !== null && existingCt.thanh_tien !== undefined)) {
+            amt = parseFloat(existingCt.thanh_tien) !== undefined && existingCt.thanh_tien !== null ? parseFloat(existingCt.thanh_tien) : amt;
+          }
+        }
+        tongTien += amt;
       });
     });
 
@@ -1918,7 +2118,7 @@ const handleChotKy = async (req, res) => {
 
     const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
     const tuNgayChot = req.body?.tu_ngay || ky.tu_ngay;
-    const denNgayChot = req.body?.den_ngay || (ky.den_ngay < todayVN ? todayVN : ky.den_ngay);
+    const denNgayChot = req.body?.den_ngay || ky.den_ngay;
 
     if (tuNgayChot > denNgayChot) {
       return res.status(400).json({ ok: false, error: `Từ ngày (${tuNgayChot}) không được lớn hơn Đến ngày (${denNgayChot})` });
@@ -1986,7 +2186,7 @@ const handleChotKy = async (req, res) => {
 
       let rowTotal = 0;
       for (const col of dmList) {
-        const isStrictLocked = ['truc_phong', 'y_te', 'bt_an', 'thiet_bi', 'gs_an'].includes(col.ma_khoan_chi);
+        const isStrictLocked = ['truc_phong', 'bt_an', 'gs_an'].includes(col.ma_khoan_chi);
         const cleanName = p.ho_ten.trim().toLowerCase();
         const isHuynhDucVinhGs = (cleanName.includes('huỳnh đức vịnh') || cleanName.includes('đức vịnh')) && col.ma_khoan_chi === 'gs_ban_tru';
 
@@ -2106,8 +2306,7 @@ const handleChotKy = async (req, res) => {
         where: { tu_ngay: nextStart },
       });
       if (!existingNextKy) {
-        const totalCount = await KeToanKyTongHop.count();
-        const nextKyName = `TH Kỳ ${totalCount + 1}`;
+        const nextKyName = 'Kỳ hệ thống';
         nextKy = await KeToanKyTongHop.create({
           ten_ky: nextKyName,
           tu_ngay: nextStart,
@@ -2161,10 +2360,44 @@ router.post('/ky-tong-hop/:id/chot', ketoanOrAdmin, handleChotKy);
 
 // POST /api/ketoan/ky-tong-hop/:id/mo-lai & /mo-lai-ky
 const handleMoLaiKy = async (req, res) => {
-  return res.status(400).json({
-    ok: false,
-    error: 'Kỳ đã chốt sổ, quy chế kế toán không cho phép mở lại hay chỉnh sửa số liệu.',
-  });
+  try {
+    const ky = await KeToanKyTongHop.findByPk(req.params.id);
+    if (!ky) return res.status(404).json({ ok: false, error: 'Không tìm thấy kỳ tổng hợp' });
+
+    if (!isSuperAdminUser(req)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'Kỳ đã chốt sổ kế toán. Chỉ Quản trị viên cấp cao (Super Admin) mới có quyền can thiệp mở lại.',
+      });
+    }
+
+    await ky.update({
+      trang_thai: 'dang_dien_ra',
+      ngay_chot: null,
+      nguoi_chot_id: null,
+      nguoi_chot_ten: null,
+    });
+
+    try {
+      const kyTruc = await KyTrucGV.findOne({
+        where: { tu_ngay: ky.tu_ngay },
+      });
+      if (kyTruc && kyTruc.trang_thai === 'da_chot') {
+        await kyTruc.update({ trang_thai: 'dang_dien_ra', ngay_chot: null, nguoi_chot_id: null });
+      }
+    } catch (syncErr) {
+      console.warn('Lỗi đồng bộ KyTrucGV khi mở lại kỳ:', syncErr.message);
+    }
+
+    await logThietLap('MO_LAI_KY', `Super Admin mở lại kỳ tổng hợp "${ky.ten_ky}" (ID: ${ky.id})`, req);
+    return res.json({
+      ok: true,
+      message: `Đã mở lại kỳ "${ky.ten_ky}" thành công. Bây giờ kế toán có thể chỉnh sửa số liệu.`,
+      data: ky,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
 };
 
 router.post('/ky-tong-hop/:id/mo-lai-ky', ketoanOrAdmin, handleMoLaiKy);
@@ -2413,12 +2646,23 @@ router.get('/ky-tong-hop/:id/export-excel', ketoanOrAdmin, async (req, res) => {
       pageSetup: { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, blackAndWhite: true },
     });
 
+    const formatDMY = (dStr) => {
+      if (!dStr) return '';
+      const parts = String(dStr).split('-');
+      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      return dStr;
+    };
+    const namHoc = cauHinh?.nam_hoc || (ky.tu_ngay ? `${ky.tu_ngay.split('-')[0]}-${parseInt(ky.tu_ngay.split('-')[0], 10) + 1}` : '2026-2027');
+    const cleanKyTen = (ky.ten_ky || '').replace(/^kỳ\s+/i, '').trim();
+    const tuDMY = formatDMY(ky.tu_ngay);
+    const denDMY = formatDMY(ky.den_ngay);
+
     // 1. Tiêu đề đơn vị & Quốc hiệu
     ws.addRow(['SỞ GIÁO DỤC VÀ ĐÀO TẠO TP. HỒ CHÍ MINH', '', '', '', '', '', '', '', '', 'CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM']);
     ws.addRow([`TRƯỜNG ${tenTruong.toUpperCase()}`, '', '', '', '', '', '', '', '', 'Độc lập - Tự do - Hạnh phúc']);
     ws.addRow([]);
-    ws.addRow([`DANH SÁCH CHI TRẢ TIỀN CÔNG TÁC BÁN TRÚ - ${ky.ten_ky.toUpperCase()}`]);
-    ws.addRow([`(Từ ngày ${ky.tu_ngay} đến ngày ${ky.den_ngay})`]);
+    ws.addRow([`BẢNG TỔNG HỢP CB-GV-NV THAM GIA CÔNG TÁC BÁN TRÚ NH ${namHoc}`]);
+    ws.addRow([`${cleanKyTen ? cleanKyTen + ' ' : ''}(Từ ngày ${tuDMY} đến ngày ${denDMY})`]);
     ws.addRow([]);
 
     const titleRow1 = ws.getRow(1);
@@ -2605,7 +2849,7 @@ router.get('/ky-tong-hop/:id/export-excel', ketoanOrAdmin, async (req, res) => {
     ws.addRow([]);
 
     const signNameRowValues = new Array(totalColCount).fill('');
-    signNameRowValues[1] = ky.created_by_name || keToanUser?.fullname || 'Trần Thị Hồng Cẩm';
+    signNameRowValues[1] = req.user?.fullname || req.user?.username || ky.created_by_name || keToanUser?.fullname || 'Kế toán';
     signNameRowValues[gDocStartCol - 1] = quanLyUser?.fullname || cauHinh?.nguoi_phu_trach || 'Vũ Quốc Phong';
     const signNameRow = ws.addRow(signNameRowValues);
     signNameRow.font = { name: 'Times New Roman', size: 11, bold: true };
