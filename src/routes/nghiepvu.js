@@ -371,7 +371,12 @@ async function checkAndAutoRescueRooms(targetNgay) {
                 where: { ngay: targetNgay, loai_truc: loaiTrucNum, ma_phong_id: { [Op.in]: assignedRooms } }
             });
             const completedRooms = new Set(
-                existingChots.filter(ec => ec.trang_thai_chot === 'da_chot' || ec.da_diem_danh).map(ec => ec.ma_phong_id)
+                existingChots.filter(ec => 
+                    ec.trang_thai_chot === 'da_chot' || 
+                    Boolean(ec.da_diem_danh) || 
+                    ec.trang_thai_chot === 'mo_chot' || 
+                    ec.ghi_chu_chot?.includes('mở lại')
+                ).map(ec => ec.ma_phong_id)
             );
             const uncompletedRooms = assignedRooms.filter(r => !completedRooms.has(r));
             if (uncompletedRooms.length === 0) continue;
@@ -420,6 +425,11 @@ async function checkAndAutoRescueRooms(targetNgay) {
             const allRecordsToSave = [];
             const phongUpserts = [];
 
+            // Mốc thời gian chốt chuẩn theo ca (giờ Việt Nam): Ca ăn = 11h30, Ca ngủ = 12h00
+            const chotHourStr = loaiTrucNum === 0 ? '11:30:00' : '12:00:00';
+            const autoChotDate = new Date(`${targetNgay}T${chotHourStr}+07:00`);
+            const chotHourLabel = loaiTrucNum === 0 ? '11h30' : '12h00';
+
             for (const ma_phong of uncompletedRooms) {
                 const roomHs = hsByRoom[ma_phong] || [];
                 if (roomHs.length === 0) continue;
@@ -444,13 +454,13 @@ async function checkAndAutoRescueRooms(targetNgay) {
 
                     let finalStatus = 1; // Mặc định Vắng nếu không chốt và chưa quét
                     let phuongThuc = 'auto_he_thong_lay_ve';
-                    let thoiGian = new Date();
+                    let thoiGian = autoChotDate;
                     let ghiChu = null;
 
                     if (dr && dr.status !== undefined && dr.status !== null) {
                         finalStatus = dr.status;
                         phuongThuc = dr.phuong_thuc || 'qr';
-                        thoiGian = dr.time || dr.scanned_at || new Date();
+                        thoiGian = dr.time || dr.scanned_at || autoChotDate;
                         ghiChu = dr.ghi_chu || null;
                     }
 
@@ -470,10 +480,10 @@ async function checkAndAutoRescueRooms(targetNgay) {
                     ngay: targetNgay,
                     loai_truc: loaiTrucNum,
                     da_diem_danh: true,
-                    thoi_gian: new Date(),
+                    thoi_gian: autoChotDate,
                     trang_thai_chot: 'da_chot',
                     ma_gv_chot_id: null, // Hệ thống tự động thu thập
-                    ghi_chu_chot: 'Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực'
+                    ghi_chu_chot: `Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực (${chotHourLabel})`
                 });
             }
 
@@ -1572,7 +1582,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
             if (loaiTrucNum === 0 && pc.nhiem_vu !== 0) {
                 return res.status(403).json({ ok: false, error: 'Bạn được phân công Giám sát ca ăn, không có quyền chốt điểm danh.' });
             }
-            if (req.user.role === 'giao_vien') {
+            if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
                 if (ngay !== vn.todayStr) {
                     return res.status(403).json({ ok: false, error: `Theo quy định, hệ thống chỉ mở chốt sổ vào đúng ngày trực (${ngay}) trong khung giờ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'}.` });
                 }
@@ -1732,6 +1742,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         return res.status(500).json({ ok: false, error: err.message });
     }
 });
+
 
 /** POST /api/diemdanh/mo-chot/ - Mở lại chốt điểm danh phòng (cho phép GV điểm danh hoặc kiểm thử lại) */
 router.post('/api/diemdanh/mo-chot/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly', 'giao_vien'), async (req, res) => {

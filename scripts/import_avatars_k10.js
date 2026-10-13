@@ -28,6 +28,9 @@ const aliases = {
     'nguyen bao ha': 'nguyen bao hoa', // Nguyễn Bảo Hòa vs Bảo Hà
     'pham gia hao': 'pham gia hao', // Phạm Gia Hào vs Gia Hảo
   },
+  '10A4': {
+    'dao nguyen hien nhi': 'hien nhi', // File ảnh bổ sung: Hiển Nhi.jpg
+  },
   '10A5': {
     'hang dang khuong': 'han dang khuong', // Hàn vs Hàng
     'pham hoang gia phat': 'pham hoang gia phap', // Pháp vs Phát
