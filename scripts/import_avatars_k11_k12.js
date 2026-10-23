@@ -21,6 +21,7 @@ function normalizeName(str) {
 const aliases = {
   '11A1': {
     'nguyen truong khoa': 'nguyen truong kha', // Kha vs Khoa
+    'tran vu quynh anh': 'quynh anh',
   },
   '11A2': {
     'phan thanh ha': 'thanh thanh ha', // Phan vs Thanh
@@ -46,6 +47,7 @@ const aliases = {
   '11A9': {
     'phan ngoc khanh an': 'phan ngocjn khanh an', // Studio gõ nhầm telex "Ngocjn"
     'nguyen thien bao': 'nguyen phuong bao', // Phương vs Thiên
+    'nguyen hoang gia tue': 'gia tue',
   },
   '12A2': {
     'le nguyen thanh thuy': 'le nguyen hanh thuy', // Studio gõ thiếu chữ T
@@ -59,6 +61,9 @@ const aliases = {
   },
   '12A7': {
     'than ha khanh linh': 'than hoang khanh linh', // Hoàng vs Hà
+  },
+  '12A10': {
+    'nguyen hoang danh': 'nguyen hoang danh 12a10',
   },
 };
 
@@ -149,6 +154,12 @@ async function processGrade(grade, imgRelativeDir, uploadDir) {
 
       fs.writeFileSync(destFileRaw, buffer);
       fs.writeFileSync(destFileCard, buffer);
+
+      const feUploadDir = path.resolve(__dirname, '../../Front-end/public/uploads/avatars');
+      if (fs.existsSync(feUploadDir)) {
+        fs.writeFileSync(path.join(feUploadDir, `${rawId}.jpg`), buffer);
+        fs.writeFileSync(path.join(feUploadDir, `${cardId}.jpg`), buffer);
+      }
 
       totalBytes += buffer.length;
       processedCount++;
