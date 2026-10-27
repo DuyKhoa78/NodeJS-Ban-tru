@@ -3269,9 +3269,15 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, roleRequired('admin', 'qu
 
             const vangNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 1).length;
             const phepNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 2).length;
-            const coMatNgu = phaiNgu.filter(ng => recs[ng]?.ngu === 0).length;
+            const coMatNgu = phaiNgu.filter(ng => {
+                const n = recs[ng]?.ngu;
+                if (n === 0) return true;
+                if (n === 1 || n === 2) return false;
+                return recs[ng]?.an === 0 || (!recs[ng]?.an && recs[ng]?.an !== 1 && recs[ng]?.an !== 2);
+            }).length;
 
             const buoiAnThucTe = coMatAn;
+            const buoiAnTinhTien = phaiAn.length - phepAn;
             const buoiNguThucTe = coMatNgu;
 
             let tienAn = 0;
@@ -3314,6 +3320,7 @@ router.get('/api/baocao/tong-hop-lop/', loginRequired, roleRequired('admin', 'qu
                 vang_ngu: vangNgu,
                 phep_ngu: phepNgu,
                 buoi_an_thuc_te: buoiAnThucTe,
+                buoi_an_tinh_tien: buoiAnTinhTien,
                 buoi_ngu_thuc_te: buoiNguThucTe,
                 tien_an: tienAn,
                 tien_ngu: tienNgu,
