@@ -141,6 +141,15 @@ async function runImport() {
       fs.writeFileSync(destFileRaw, buffer);
       fs.writeFileSync(destFileCard, buffer);
 
+      const fePublicUploadDir = path.join(__dirname, '../../Front-end/public/uploads/avatars');
+      if (fs.existsSync(path.join(__dirname, '../../Front-end/public'))) {
+        if (!fs.existsSync(fePublicUploadDir)) {
+          fs.mkdirSync(fePublicUploadDir, { recursive: true });
+        }
+        fs.writeFileSync(path.join(fePublicUploadDir, `${rawId}.jpg`), buffer);
+        fs.writeFileSync(path.join(fePublicUploadDir, `${cardId}.jpg`), buffer);
+      }
+
       totalBytes += buffer.length;
       processedCount++;
       matched.push({ id: hs.id, cardId, ho_ten: hs.ho_ten, lop: hs.lop, file: found.file });

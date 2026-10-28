@@ -475,6 +475,9 @@ async function checkAndAutoRescueRooms(targetNgay) {
                     });
                 }
 
+                const prevChot = existingChots.find(ec => ec.ma_phong_id === ma_phong);
+                const prevTags = prevChot?.ghi_chu_chot ? (prevChot.ghi_chu_chot.match(/\[SANH_[123]:[^\]]+\]/g) || []).join(' ') : '';
+                const autoNote = `Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực (${chotHourLabel})`;
                 phongUpserts.push({
                     ma_phong_id: ma_phong,
                     ngay: targetNgay,
@@ -482,8 +485,8 @@ async function checkAndAutoRescueRooms(targetNgay) {
                     da_diem_danh: true,
                     thoi_gian: autoChotDate,
                     trang_thai_chot: 'da_chot',
-                    ma_gv_chot_id: null, // Hệ thống tự động thu thập
-                    ghi_chu_chot: `Hệ thống tự động thu thập và chốt sổ sau khi hết giờ ca trực (${chotHourLabel})`
+                    ma_gv_chot_id: prevChot?.ma_gv_chot_id || null,
+                    ghi_chu_chot: prevTags ? `${prevTags} | ${autoNote}` : autoNote
                 });
             }
 
@@ -509,6 +512,94 @@ async function checkAndAutoRescueRooms(targetNgay) {
     } catch (e) {
         console.error('checkAndAutoRescueRooms error:', e.message);
     }
+}
+
+// ─── Helper: Chia danh sách phòng ăn SANH trên giao diện GV thành SANH_1, SANH_2, SANH_3 (không đổi CSDL) ───
+const HTA_DS_CONFIG_BE = [
+    { ds: 1, classes: ['10A10', '12A2', '12A5', '12A7'] },
+    { ds: 2, classes: ['10A9', '12A4', '12A9', '12A10'] },
+    { ds: 3, classes: ['11A9', '12A1', '12A3', '12A6', '12A8'] },
+];
+
+function getHTAGroupNumberBE(cls) {
+    const key = String(cls || '').trim().toUpperCase().replace(/\s+/g, '');
+    for (const group of HTA_DS_CONFIG_BE) {
+        if (group.classes.includes(key)) return group.ds;
+    }
+    if (key.startsWith('11')) return 3;
+    if (key.startsWith('10')) {
+        const numMatch = key.match(/\d+A?(\d+)/i);
+        const num = numMatch ? parseInt(numMatch[1], 10) : 0;
+        return (num >= 10 || num % 2 === 0) ? 1 : 2;
+    }
+    if (key.startsWith('12')) {
+        const numMatch = key.match(/\d+A?(\d+)/i);
+        const num = numMatch ? parseInt(numMatch[1], 10) : 0;
+        if ([2, 5, 7].includes(num)) return 1;
+        if ([4, 9, 10].includes(num)) return 2;
+        if ([1, 3, 6, 8].includes(num)) return 3;
+        return 1;
+    }
+    return 1;
+}
+
+function parseSanhSubRoom(roomCode) {
+    const raw = String(roomCode || '').trim().toUpperCase();
+    const m = raw.match(/^(?:SANH|HT\.?A)[_-]?([123])$/i);
+    if (m) {
+        const groupNum = parseInt(m[1], 10);
+        return {
+            isSubRoom: true,
+            baseRoom: 'SANH',
+            groupNum,
+            subCode: `SANH_${groupNum}`,
+        };
+    }
+    return {
+        isSubRoom: false,
+        baseRoom: raw,
+        groupNum: null,
+        subCode: raw,
+    };
+}
+
+function parseSanhSubChotMap(ghiChuChot) {
+    const map = {};
+    if (!ghiChuChot) return map;
+    const regex = /\[SANH_([123]):([^\]]+)\]/g;
+    let m;
+    while ((m = regex.exec(String(ghiChuChot))) !== null) {
+        map[parseInt(m[1], 10)] = m[2].trim();
+    }
+    return map;
+}
+
+function buildSanhGhiChuChot(subChotMap, extraNote) {
+    const tags = [1, 2, 3]
+        .filter(g => subChotMap[g])
+        .map(g => `[SANH_${g}:${subChotMap[g]}]`)
+        .join(' ');
+    const cleanNote = String(extraNote || '').replace(/\[SANH_[123]:[^\]]+\]/g, '').replace(/^\s*\|\s*/, '').trim();
+    if (tags && cleanNote) return `${tags} | ${cleanNote}`;
+    return tags || cleanNote || 'Giáo viên chốt điểm danh thành công lên Tổng';
+}
+
+function isSanhSubRoomChot(ddpRecord, groupNum) {
+    if (!ddpRecord) return { isChot: false, tenNguoiChot: null, isAutoChot: false };
+    const subMap = parseSanhSubChotMap(ddpRecord.ghi_chu_chot);
+    if (subMap[groupNum]) {
+        return { isChot: true, tenNguoiChot: subMap[groupNum], isAutoChot: false };
+    }
+    const isWholeCompleted = ddpRecord.trang_thai_chot === 'da_chot' || Boolean(ddpRecord.da_diem_danh);
+    if (isWholeCompleted) {
+        const isAuto = Boolean(ddpRecord.ghi_chu_chot?.includes('Hệ thống') || ddpRecord.ma_gv_chot_id === null);
+        return {
+            isChot: true,
+            tenNguoiChot: isAuto ? 'Hệ thống' : (ddpRecord.ten_nguoi_chot || null),
+            isAutoChot: isAuto,
+        };
+    }
+    return { isChot: false, tenNguoiChot: null, isAutoChot: false };
 }
 
 /** GET /api/diemdanh/?ngay=&loai= */
@@ -563,6 +654,30 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
                 is_gv_chot: isGvChot
             };
         });
+
+        // Bổ sung trạng thái chốt ảo cho SANH_1, SANH_2, SANH_3 để GV điểm danh Sảnh độc lập từng danh sách
+        if (loaiTrucQuery === 0) {
+            const sanhPs = phongStatuses.find(ps => ps.ma_phong_id === 'SANH');
+            if (sanhPs) {
+                [1, 2, 3].forEach(g => {
+                    const subCheck = isSanhSubRoomChot(sanhPs, g);
+                    if (subCheck.isChot) {
+                        phongStatuses.push({
+                            ...sanhPs,
+                            ma_phong_id: `SANH_${g}`,
+                            da_diem_danh: true,
+                            trang_thai_chot: 'da_chot',
+                            ten_nguoi_chot: subCheck.tenNguoiChot || sanhPs.ten_nguoi_chot,
+                            is_auto_chot: subCheck.isAutoChot,
+                            is_gv_chot: !subCheck.isAutoChot,
+                            nguoi_chot: subCheck.tenNguoiChot
+                                ? { ...(sanhPs.nguoi_chot || {}), fullname: subCheck.tenNguoiChot }
+                                : sanhPs.nguoi_chot
+                        });
+                    }
+                });
+            }
+        }
 
         // Nếu là giáo viên hoặc học vụ, xác định phòng được phân công
         let assignedRooms = null;
@@ -747,7 +862,8 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 }
                 const assignedRoomsSet = new Set(pcList.map(pc => pc.ma_phong_id));
                 for (const r of records) {
-                    if (r.ma_phong && !assignedRoomsSet.has(r.ma_phong)) {
+                    const basePhong = r.ma_phong ? parseSanhSubRoom(r.ma_phong).baseRoom : null;
+                    if (basePhong && !assignedRoomsSet.has(basePhong)) {
                         return res.status(403).json({
                             ok: false,
                             error: `Bạn không được phân công trực phòng ${r.ma_phong}, không thể điểm danh cho phòng này.`
@@ -856,14 +972,17 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 }
             }
 
-            const data = validRecords.map(r => ({
-                ma_hs_id: r.ma_hs,
-                ngay: r.ngay,
-                [field]: r.status,
-                [fieldPhong]: r.ma_phong || lsMap[r.ma_hs] || fallbackMap[r.ma_hs] || null,
-                [oppositeField]: null,
-                ...(r.ghi_chu ? { ghi_chu: r.ghi_chu } : {})
-            }));
+            const data = validRecords.map(r => {
+                const basePhong = r.ma_phong ? parseSanhSubRoom(r.ma_phong).baseRoom : null;
+                return {
+                    ma_hs_id: r.ma_hs,
+                    ngay: r.ngay,
+                    [field]: r.status,
+                    [fieldPhong]: basePhong || lsMap[r.ma_hs] || fallbackMap[r.ma_hs] || null,
+                    [oppositeField]: null,
+                    ...(r.ghi_chu ? { ghi_chu: r.ghi_chu } : {})
+                };
+            });
 
             const updateFields = [field, fieldPhong];
             if (validRecords.some(r => r.ghi_chu)) {
@@ -1281,15 +1400,21 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             }
 
             // Kiểm tra trạng thái báo cáo ca trực của phòng (hỗ trợ cả báo cáo đơn phòng và báo cáo gộp liên phòng)
+            // Riêng phòng SANH có nhiều GV cùng điểm danh nên đối chiếu theo đúng họ tên GV trực để không bị lẫn báo cáo của GV khác
+            const gvNameForReport = pc.giao_vien?.ho_ten || req.user.fullname || req.user.username || '';
+            const bcWhere = {
+                ngay: targetNgay,
+                ca_truc: loaiTruc,
+                [Op.or]: [
+                    { ma_phong: maPhong },
+                    { ma_phong: { [Op.like]: `%${maPhong}%` } }
+                ]
+            };
+            if (maPhong === 'SANH' && loaiTruc === 0 && gvNameForReport) {
+                bcWhere.ho_ten_gv = gvNameForReport;
+            }
             const bcRecord = await BaoCaoTruc.findOne({
-                where: {
-                    ngay: targetNgay,
-                    ca_truc: loaiTruc,
-                    [Op.or]: [
-                        { ma_phong: maPhong },
-                        { ma_phong: { [Op.like]: `%${maPhong}%` } }
-                    ]
-                },
+                where: bcWhere,
                 order: [['id', 'DESC']]
             });
 
@@ -1312,7 +1437,13 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
                 bcTimeState = 'da_qua_gio';
             }
 
-            const isChot = Boolean(phongStatus && (phongStatus.trang_thai_chot === 'da_chot' || phongStatus.da_diem_danh));
+            let isChot = Boolean(phongStatus && (phongStatus.trang_thai_chot === 'da_chot' || phongStatus.da_diem_danh));
+            if (!isChot && maPhong === 'SANH' && loaiTruc === 0 && phongStatus?.ghi_chu_chot) {
+                const subMap = parseSanhSubChotMap(phongStatus.ghi_chu_chot);
+                if (gvNameForReport && Object.values(subMap).some(n => n.toLowerCase() === gvNameForReport.toLowerCase())) {
+                    isChot = true;
+                }
+            }
             const isAdmin = req.user.role === 'admin' || req.user.role === 'quan_ly' || req.user.is_superuser;
             let canReport = true;
             let reportLockReason = '';
@@ -1406,6 +1537,8 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
         }
 
         const loaiTrucNum = Number(loai_truc);
+        const subInfo = parseSanhSubRoom(ma_phong_id);
+        const dbPhongId = subInfo.baseRoom;
 
         // Kiểm tra phân công nếu là giáo viên hoặc học vụ
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
@@ -1414,7 +1547,7 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
                 where: {
                     ngay,
                     loai_truc: loaiTrucNum,
-                    ma_phong_id,
+                    ma_phong_id: dbPhongId,
                     ...getTeacherActiveDutyCondition(gvId)
                 }
             });
@@ -1458,12 +1591,30 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
             });
         }
 
+        // Nếu là phân nhánh SANH_1/SANH_2/SANH_3 thì gộp (merge) theo ID học sinh để không đè bản nháp của GV danh sách khác
+        let finalDraftList = cleanList;
+        if (subInfo.isSubRoom) {
+            const existingDraft = await DiemDanhDraft.findOne({
+                where: { ngay, loai_truc: loaiTrucNum, ma_phong_id: dbPhongId }
+            });
+            if (existingDraft && Array.isArray(existingDraft.danh_sach_hs)) {
+                const mergedMap = new Map();
+                existingDraft.danh_sach_hs.forEach(item => {
+                    if (item && item.id !== undefined) mergedMap.set(item.id, item);
+                });
+                cleanList.forEach(item => {
+                    if (item && item.id !== undefined) mergedMap.set(item.id, item);
+                });
+                finalDraftList = Array.from(mergedMap.values());
+            }
+        }
+
         await DiemDanhDraft.upsert({
             ngay,
             loai_truc: loaiTrucNum,
-            ma_phong_id,
+            ma_phong_id: dbPhongId,
             ma_gv_id: req.user.id,
-            danh_sach_hs: cleanList,
+            danh_sach_hs: finalDraftList,
             updated_at: new Date()
         });
 
@@ -1487,6 +1638,8 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
         }
 
         const loaiTrucNum = Number(loai_truc);
+        const subInfo = parseSanhSubRoom(ma_phong_id);
+        const dbPhongId = subInfo.baseRoom;
 
         // Kiểm tra phân công nếu là giáo viên hoặc học vụ (không cho phép xem bản nháp phòng người khác)
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
@@ -1495,7 +1648,7 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
                 where: {
                     ngay,
                     loai_truc: loaiTrucNum,
-                    ma_phong_id,
+                    ma_phong_id: dbPhongId,
                     ...getTeacherActiveDutyCondition(gvId)
                 }
             });
@@ -1514,17 +1667,35 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
         }
 
         const draft = await DiemDanhDraft.findOne({
-            where: { ngay, loai_truc: loaiTrucNum, ma_phong_id }
+            where: { ngay, loai_truc: loaiTrucNum, ma_phong_id: dbPhongId }
         });
 
         const phongStatus = await DiemDanhPhong.findOne({
-            where: { ngay, loai_truc: loaiTrucNum, ma_phong_id }
+            where: { ngay, loai_truc: loaiTrucNum, ma_phong_id: dbPhongId }
         });
+
+        let responseDraft = draft ? (draft.toJSON ? draft.toJSON() : { ...draft }) : null;
+        let responsePhongStatus = phongStatus ? (phongStatus.toJSON ? phongStatus.toJSON() : { ...phongStatus }) : null;
+
+        if (subInfo.isSubRoom) {
+            if (responseDraft && Array.isArray(responseDraft.danh_sach_hs)) {
+                responseDraft.danh_sach_hs = responseDraft.danh_sach_hs.filter(
+                    item => getHTAGroupNumberBE(item.lop) === subInfo.groupNum
+                );
+            }
+            const subCheck = isSanhSubRoomChot(phongStatus, subInfo.groupNum);
+            if (responseDraft) responseDraft.is_chot = subCheck.isChot;
+            if (responsePhongStatus) {
+                responsePhongStatus.ma_phong_id = subInfo.subCode;
+                responsePhongStatus.da_diem_danh = subCheck.isChot;
+                responsePhongStatus.trang_thai_chot = subCheck.isChot ? 'da_chot' : 'chua_chot';
+            }
+        }
 
         return res.json({
             ok: true,
-            draft: draft || null,
-            phong_status: phongStatus || null
+            draft: responseDraft,
+            phong_status: responsePhongStatus
         });
     } catch (err) {
         return res.status(500).json({ ok: false, error: err.message });
@@ -1555,6 +1726,8 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         }
 
         const loaiTrucNum = Number(loai_truc);
+        const subInfo = parseSanhSubRoom(ma_phong_id);
+        const dbPhongId = subInfo.baseRoom;
         const vn = getVietnamTime();
 
         // Quy định: Toàn bộ người dùng (kể cả Admin) không được chốt sổ với những ngày chưa đến
@@ -1572,7 +1745,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 where: {
                     ngay,
                     loai_truc: loaiTrucNum,
-                    ma_phong_id,
+                    ma_phong_id: dbPhongId,
                     ...getTeacherActiveDutyCondition(gvId)
                 }
             });
@@ -1600,7 +1773,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
         const dbStudents = await HocSinh.findAll({
             where: {
-                [fieldPhong]: ma_phong_id,
+                [fieldPhong]: dbPhongId,
                 [Op.or]: [
                     { dang_hoc: true },
                     { ngay_rut: { [Op.gt]: ngay } }
@@ -1611,9 +1784,13 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
         // Kết hợp với danh_sach_hs do client gửi lên (bảo đảm học sinh tạm/đặc biệt không bị bỏ sót)
         const studentMap = new Map();
-        dbStudents.forEach(s => studentMap.set(s.id, { id: s.id, ho_ten: s.ho_ten, lop: s.lop, ngay_vao: s.ngay_vao, ngay_rut: s.ngay_rut, dang_hoc: s.dang_hoc }));
+        dbStudents.forEach(s => {
+            if (subInfo.isSubRoom && getHTAGroupNumberBE(s.lop) !== subInfo.groupNum) return;
+            studentMap.set(s.id, { id: s.id, ho_ten: s.ho_ten, lop: s.lop, ngay_vao: s.ngay_vao, ngay_rut: s.ngay_rut, dang_hoc: s.dang_hoc });
+        });
         if (Array.isArray(danh_sach_hs)) {
             danh_sach_hs.forEach(item => {
+                if (subInfo.isSubRoom && item.lop && getHTAGroupNumberBE(item.lop) !== subInfo.groupNum) return;
                 if (!studentMap.has(item.id)) {
                     studentMap.set(item.id, item);
                 }
@@ -1680,7 +1857,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 recordsToSave.push({
                     ma_hs_id: hs.id,
                     ngay,
-                    [fieldPhong]: ma_phong_id,
+                    [fieldPhong]: dbPhongId,
                     [fieldStatus]: finalStatus,
                     [fieldPhuongThuc]: phuongThuc,
                     [fieldThoiGian]: thoiGian,
@@ -1696,26 +1873,58 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 });
             }
 
-            // Ghi nhận trạng thái chốt phòng
+            // Ghi nhận trạng thái chốt phòng (nếu là SANH_1, SANH_2, SANH_3 thì lưu riêng tiến độ từng danh sách vào ghi_chu_chot của SANH)
+            let finalDaDiemDanh = true;
+            let finalTrangThaiChot = 'da_chot';
+            let finalGhiChuChot = ghi_chu || 'Giáo viên chốt điểm danh thành công lên Tổng';
+
+            if (subInfo.isSubRoom) {
+                const existingDdp = await DiemDanhPhong.findOne({
+                    where: { ma_phong_id: dbPhongId, ngay, loai_truc: loaiTrucNum },
+                    transaction: t
+                });
+                const subChotMap = parseSanhSubChotMap(existingDdp?.ghi_chu_chot);
+                const gvDisplayName = req.user.fullname || req.user.username || 'Giáo viên';
+                subChotMap[subInfo.groupNum] = gvDisplayName;
+                const allThreeDone = Boolean(subChotMap[1] && subChotMap[2] && subChotMap[3]);
+                finalDaDiemDanh = allThreeDone;
+                finalTrangThaiChot = allThreeDone ? 'da_chot' : 'dang_chot';
+                finalGhiChuChot = buildSanhGhiChuChot(subChotMap, ghi_chu || 'Giáo viên chốt điểm danh thành công lên Tổng');
+            }
+
             await DiemDanhPhong.upsert({
-                ma_phong_id,
+                ma_phong_id: dbPhongId,
                 ngay,
                 loai_truc: loaiTrucNum,
-                da_diem_danh: true,
+                da_diem_danh: finalDaDiemDanh,
                 thoi_gian: new Date(),
-                trang_thai_chot: 'da_chot',
+                trang_thai_chot: finalTrangThaiChot,
                 ma_gv_chot_id: req.user.id,
-                ghi_chu_chot: ghi_chu || 'Giáo viên chốt điểm danh thành công lên Tổng'
+                ghi_chu_chot: finalGhiChuChot
             }, { transaction: t });
 
-            // Cập nhật trạng thái draft
+            // Cập nhật trạng thái draft (gộp nếu là SANH_1/2/3)
+            let mergedDraftHs = Array.isArray(danh_sach_hs) ? danh_sach_hs : [];
+            if (subInfo.isSubRoom) {
+                const existingDraft = await DiemDanhDraft.findOne({
+                    where: { ngay, loai_truc: loaiTrucNum, ma_phong_id: dbPhongId },
+                    transaction: t
+                });
+                if (existingDraft && Array.isArray(existingDraft.danh_sach_hs)) {
+                    const mMap = new Map();
+                    existingDraft.danh_sach_hs.forEach(item => { if (item && item.id !== undefined) mMap.set(item.id, item); });
+                    mergedDraftHs.forEach(item => { if (item && item.id !== undefined) mMap.set(item.id, item); });
+                    mergedDraftHs = Array.from(mMap.values());
+                }
+            }
+
             await DiemDanhDraft.upsert({
                 ngay,
                 loai_truc: loaiTrucNum,
-                ma_phong_id,
+                ma_phong_id: dbPhongId,
                 ma_gv_id: req.user.id,
-                danh_sach_hs: Array.isArray(danh_sach_hs) ? danh_sach_hs : [],
-                is_chot: true,
+                danh_sach_hs: mergedDraftHs,
+                is_chot: finalDaDiemDanh,
                 updated_at: new Date()
             }, { transaction: t });
 
@@ -1731,7 +1940,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
             return res.json({
                 ok: true,
-                message: `Đã chốt danh sách phòng ${ma_phong_id} thành công (${countCoMat} có mặt, ${countVang} vắng, ${countPhep} phép).`,
+                message: `Đã chốt danh sách ${subInfo.subCode} thành công (${countCoMat} có mặt, ${countVang} vắng, ${countPhep} phép).`,
                 counts: { comat: countCoMat, vang: countVang, phep: countPhep }
             });
         } catch (err) {
@@ -1758,20 +1967,40 @@ router.post('/api/diemdanh/mo-chot/', loginRequired, roleRequired('admin', 'hoc_
         }
 
         const loaiTrucNum = Number(loai_truc);
+        const subInfo = ma_phong_id ? parseSanhSubRoom(ma_phong_id) : null;
+        const dbPhongId = subInfo ? subInfo.baseRoom : null;
         const whereClause = { ngay, loai_truc: loaiTrucNum };
-        if (ma_phong_id) whereClause.ma_phong_id = ma_phong_id;
+        if (dbPhongId) whereClause.ma_phong_id = dbPhongId;
 
-        // Xóa bản ghi chốt phòng trong DiemDanhPhong
-        await DiemDanhPhong.destroy({ where: whereClause });
-
-        // Xóa bản nháp liên quan để cho phép quét mới hoàn toàn
-        await DiemDanhDraft.destroy({ where: whereClause });
+        if (subInfo && subInfo.isSubRoom) {
+            const existingDdp = await DiemDanhPhong.findOne({ where: whereClause });
+            if (existingDdp) {
+                const subMap = parseSanhSubChotMap(existingDdp.ghi_chu_chot);
+                delete subMap[subInfo.groupNum];
+                if (Object.keys(subMap).length === 0) {
+                    await existingDdp.destroy();
+                } else {
+                    existingDdp.da_diem_danh = false;
+                    existingDdp.trang_thai_chot = 'dang_chot';
+                    existingDdp.ghi_chu_chot = buildSanhGhiChuChot(subMap, 'Mở chốt danh sách lẻ');
+                    await existingDdp.save();
+                }
+            }
+        } else {
+            // Xóa bản ghi chốt phòng trong DiemDanhPhong
+            await DiemDanhPhong.destroy({ where: whereClause });
+            // Xóa bản nháp liên quan để cho phép quét mới hoàn toàn
+            await DiemDanhDraft.destroy({ where: whereClause });
+        }
 
         // Nếu reset_hs = true hoặc khi mở phòng kiểm thử, xóa trạng thái điểm danh của HS
-        if (reset_hs && ma_phong_id) {
+        if (reset_hs && dbPhongId) {
             const fieldPhong = loaiTrucNum === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
-            const students = await HocSinh.findAll({ where: { [fieldPhong]: ma_phong_id }, attributes: ['id'] });
-            const sIds = students.map(s => s.id);
+            const students = await HocSinh.findAll({ where: { [fieldPhong]: dbPhongId }, attributes: ['id', 'lop'] });
+            const filteredStudents = (subInfo && subInfo.isSubRoom)
+                ? students.filter(s => getHTAGroupNumberBE(s.lop) === subInfo.groupNum)
+                : students;
+            const sIds = filteredStudents.map(s => s.id);
             if (sIds.length > 0) {
                 if (loaiTrucNum === 0) {
                     await DiemDanhHS.update({ diem_danh_an: null, phuong_thuc_an: null, thoi_gian_diem_danh_an: null }, { where: { ngay, ma_hs_id: { [Op.in]: sIds } } });
@@ -5781,23 +6010,42 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const roomCodes = rawPhong
             ? rawPhong.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
             : [];
+        const singleSubInfo = roomCodes.length <= 1 ? parseSanhSubRoom(roomCodes[0] || rawPhong) : null;
+        const dbRoomCodes = [...new Set(roomCodes.map(rc => parseSanhSubRoom(rc).baseRoom))];
 
         // 1. Kiểm tra xem giáo viên này (hoặc phòng này) đã có báo cáo trong ngày chưa
         let existingReport = null;
         if (rawPhong) {
             if (roomCodes.length <= 1) {
                 const targetCode = (roomCodes[0] || rawPhong).toUpperCase();
-                existingReport = await BaoCaoTruc.findOne({
-                    where: {
-                        ngay: targetNgay,
-                        ca_truc: loaiTruc,
-                        [Op.or]: [
-                            { ma_phong: rawPhong.toUpperCase() },
-                            { ma_phong: { [Op.like]: `%${targetCode}%` } }
-                        ]
-                    },
-                    order: [['id', 'DESC']]
-                });
+                if (singleSubInfo && singleSubInfo.baseRoom === 'SANH' && loaiTruc === 0) {
+                    // Phòng SANH có 3 GV trực độc lập (SANH_1, SANH_2, SANH_3) -> chỉ lấy báo cáo của chính GV đang đăng nhập
+                    existingReport = await BaoCaoTruc.findOne({
+                        where: {
+                            ngay: targetNgay,
+                            ca_truc: loaiTruc,
+                            ho_ten_gv: hoTenGV,
+                            [Op.or]: [
+                                { ma_phong: 'SANH' },
+                                { ma_phong: singleSubInfo.subCode },
+                                { ma_phong: { [Op.like]: '%SANH%' } }
+                            ]
+                        },
+                        order: [['id', 'DESC']]
+                    });
+                } else {
+                    existingReport = await BaoCaoTruc.findOne({
+                        where: {
+                            ngay: targetNgay,
+                            ca_truc: loaiTruc,
+                            [Op.or]: [
+                                { ma_phong: rawPhong.toUpperCase() },
+                                { ma_phong: { [Op.like]: `%${targetCode}%` } }
+                            ]
+                        },
+                        order: [['id', 'DESC']]
+                    });
+                }
             } else {
                 // Với chế độ gộp nhiều phòng (ví dụ P6, P7, P8):
                 // 1. Tìm báo cáo gộp chung chứa tất cả các phòng
@@ -5854,12 +6102,12 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         let countChecked = 0;
         let ddMap = {};
 
-        if (roomCodes.length > 0 && (loaiTruc === 0 || loaiTruc === 1)) {
+        if (dbRoomCodes.length > 0 && (loaiTruc === 0 || loaiTruc === 1)) {
             const fieldPhong = loaiTruc === 0 ? 'ma_phong_an_id' : 'ma_phong_ngu_id';
 
             const allStudents = await HocSinh.findAll({
                 where: {
-                    [fieldPhong]: { [Op.in]: roomCodes },
+                    [fieldPhong]: { [Op.in]: dbRoomCodes },
                     [Op.or]: [
                         { dang_hoc: true },
                         { ngay_rut: { [Op.gt]: targetNgay } }
@@ -5869,11 +6117,14 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
                 order: [['lop', 'ASC'], ['ho_ten', 'ASC']]
             });
 
-            // Lọc chính xác học sinh tham gia tại ngày targetNgay
+            // Lọc chính xác học sinh tham gia tại ngày targetNgay (và theo nhóm SANH_1/2/3 nếu chọn danh sách lẻ)
             const students = allStudents.filter(s => {
                 if (s.ngay_vao && s.ngay_vao > targetNgay) return false;
                 if (s.ngay_rut && s.ngay_rut <= targetNgay) return false;
                 if (!s.dang_hoc && (!s.ngay_rut || s.ngay_rut <= targetNgay)) return false;
+                if (singleSubInfo && singleSubInfo.isSubRoom && loaiTruc === 0) {
+                    if (getHTAGroupNumberBE(s.lop) !== singleSubInfo.groupNum) return false;
+                }
                 return true;
             });
 
@@ -5897,7 +6148,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
 
             // Lấy toàn bộ draft của các phòng trong 1 query duy nhất
             const drafts = await DiemDanhDraft.findAll({
-                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: { [Op.in]: roomCodes } }
+                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: { [Op.in]: dbRoomCodes } }
             });
             drafts.forEach(draft => {
                 if (draft && Array.isArray(draft.danh_sach_hs)) {
@@ -5933,9 +6184,15 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
 
             // Kiểm tra trạng thái chốt của các phòng
             const pStatuses = await DiemDanhPhong.findAll({
-                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: { [Op.in]: roomCodes } }
+                where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: { [Op.in]: dbRoomCodes } }
             });
-            const isAllChot = pStatuses.length > 0 && pStatuses.every(ps => ps.trang_thai_chot === 'da_chot' || Boolean(ps.da_diem_danh));
+            let isAllChot = false;
+            if (singleSubInfo && singleSubInfo.isSubRoom && loaiTruc === 0) {
+                const sanhDdp = pStatuses.find(ps => ps.ma_phong_id === 'SANH');
+                isAllChot = isSanhSubRoomChot(sanhDdp, singleSubInfo.groupNum).isChot;
+            } else {
+                isAllChot = pStatuses.length > 0 && pStatuses.every(ps => ps.trang_thai_chot === 'da_chot' || Boolean(ps.da_diem_danh));
+            }
 
             soVangCalculated = vangList.length; // Chỉ tính số lượng HS vắng không phép
             countChecked = countCoMat + countPhep + soVangCalculated;
@@ -6027,10 +6284,24 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const chuaChotRooms = [];
         if (loaiTruc !== 2) {
             for (const rCode of roomCodes) {
+                const rSub = parseSanhSubRoom(rCode);
                 const ddp = await DiemDanhPhong.findOne({
-                    where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rCode }
+                    where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rSub.baseRoom }
                 });
-                if (!ddp || (ddp.trang_thai_chot !== 'da_chot' && !ddp.da_diem_danh)) {
+                if (rSub.isSubRoom && loaiTruc === 0) {
+                    if (!isSanhSubRoomChot(ddp, rSub.groupNum).isChot) {
+                        daChotDiemDanh = false;
+                        chuaChotRooms.push(rSub.subCode);
+                    }
+                } else if (rSub.baseRoom === 'SANH' && loaiTruc === 0 && ddp?.ghi_chu_chot) {
+                    const subMap = parseSanhSubChotMap(ddp.ghi_chu_chot);
+                    const isWholeDone = ddp.trang_thai_chot === 'da_chot' || Boolean(ddp.da_diem_danh);
+                    const isGvInSub = Object.values(subMap).some(n => n.toLowerCase() === hoTenGV.toLowerCase());
+                    if (!isWholeDone && !isGvInSub) {
+                        daChotDiemDanh = false;
+                        chuaChotRooms.push(rCode);
+                    }
+                } else if (!ddp || (ddp.trang_thai_chot !== 'da_chot' && !ddp.da_diem_danh)) {
                     daChotDiemDanh = false;
                     chuaChotRooms.push(rCode);
                 }
@@ -6195,10 +6466,22 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
                 const chuaChotRooms = [];
 
                 for (const rCode of roomCodes) {
+                    const rSub = parseSanhSubRoom(rCode);
                     const ddp = await DiemDanhPhong.findOne({
-                        where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rCode }
+                        where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rSub.baseRoom }
                     });
-                    if (!ddp || (ddp.trang_thai_chot !== 'da_chot' && !ddp.da_diem_danh)) {
+                    if (rSub.isSubRoom && loaiTruc === 0) {
+                        if (!isSanhSubRoomChot(ddp, rSub.groupNum).isChot) {
+                            chuaChotRooms.push(rSub.subCode);
+                        }
+                    } else if (rSub.baseRoom === 'SANH' && loaiTruc === 0 && ddp?.ghi_chu_chot) {
+                        const subMap = parseSanhSubChotMap(ddp.ghi_chu_chot);
+                        const isWholeDone = ddp.trang_thai_chot === 'da_chot' || Boolean(ddp.da_diem_danh);
+                        const isGvInSub = Object.values(subMap).some(n => n.toLowerCase() === hoTenGV.toLowerCase());
+                        if (!isWholeDone && !isGvInSub) {
+                            chuaChotRooms.push(rCode);
+                        }
+                    } else if (!ddp || (ddp.trang_thai_chot !== 'da_chot' && !ddp.da_diem_danh)) {
                         chuaChotRooms.push(rCode);
                     }
                 }
@@ -6212,21 +6495,26 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
             }
         }
 
+        // Chuẩn hóa mã phòng lưu xuống CSDL: SANH_1, SANH_2, SANH_3 vẫn lưu là 'SANH' để không ảnh hưởng CSDL
+        const subPhongSave = parseSanhSubRoom(maPhongChuan);
+        const dbMaPhongSave = subPhongSave.isSubRoom ? 'SANH' : maPhongChuan;
+
         let record = await BaoCaoTruc.findOne({
             where: {
                 ngay: targetNgay,
                 ca_truc: loaiTruc,
-                ma_phong: maPhongChuan,
+                ma_phong: dbMaPhongSave,
                 ho_ten_gv: hoTenGV,
             }
         });
 
-        if (!record) {
+        // Chỉ gộp bản ghi theo ma_phong nếu KHÔNG phải phòng SANH (vì SANH có 3 GV báo cáo riêng biệt)
+        if (!record && dbMaPhongSave !== 'SANH') {
             record = await BaoCaoTruc.findOne({
                 where: {
                     ngay: targetNgay,
                     ca_truc: loaiTruc,
-                    ma_phong: maPhongChuan,
+                    ma_phong: dbMaPhongSave,
                 }
             });
         }
@@ -6235,6 +6523,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
 
         if (record) {
             record.ho_ten_gv = hoTenGV;
+            record.ma_phong = dbMaPhongSave;
             if (si_so !== undefined) record.si_so = si_so !== null ? cleanSiSoHelper(si_so, maPhongChuan) : null;
             if (so_hs_phep !== undefined) record.so_hs_phep = Math.max(0, phepNum);
             if (so_hs_vang !== undefined) record.so_hs_vang = Math.max(0, vangNum);
@@ -6251,7 +6540,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
             record = await BaoCaoTruc.create({
                 ngay: targetNgay,
                 ca_truc: loaiTruc,
-                ma_phong: maPhongChuan,
+                ma_phong: dbMaPhongSave,
                 ho_ten_gv: hoTenGV,
                 si_so: si_so ? cleanSiSoHelper(si_so, maPhongChuan) : null,
                 so_hs_phep: Math.max(0, phepNum),
