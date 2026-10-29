@@ -3913,30 +3913,50 @@ async function calculateTeacherDutySalary(start, end) {
     const don_gia_an = getDonGiaGV(effectiveEnd, 0);
     const don_gia_ngu = getDonGiaGV(effectiveEnd, 1);
 
+    const allDbTeachers = await GiaoVien.findAll({ attributes: ['id', 'ho_ten', 'so_tai_khoan'] });
+    const teacherNameMap = {};
+    allDbTeachers.forEach(t => { teacherNameMap[t.ho_ten.trim().toLowerCase()] = t; });
+
     const gvMap = {};
     const seenShift = new Set();
     phanCong.forEach(pc => {
         let actualId, actualName, isNgoai = false, gvDbId = null, gvStk = '';
         const isSubstitute = Boolean(
-            (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) ||
-            pc.ma_gv_truc_thay_id
+            pc.ma_gv_truc_thay_id ||
+            (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim())
         );
 
-        if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
-            const cleanName = pc.ten_gv_truc_thay.trim();
-            actualId = `ngoai_${cleanName}`;
-            actualName = cleanName;
-            isNgoai = true;
-        } else if (pc.ma_gv_truc_thay_id) {
+        if (pc.ma_gv_truc_thay_id) {
             actualId = pc.ma_gv_truc_thay_id;
-            actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+            actualName = pc.giao_vien_truc_thay?.ho_ten || pc.ten_gv_truc_thay?.trim() || `GV #${pc.ma_gv_truc_thay_id}`;
             gvDbId = pc.ma_gv_truc_thay_id;
             gvStk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
+            if (!gvStk && teacherNameMap[actualName.toLowerCase()]) {
+                gvStk = teacherNameMap[actualName.toLowerCase()].so_tai_khoan || '';
+            }
+            isNgoai = false;
+        } else if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+            const cleanName = pc.ten_gv_truc_thay.trim();
+            const matchedT = teacherNameMap[cleanName.toLowerCase()];
+            if (matchedT) {
+                actualId = matchedT.id;
+                actualName = matchedT.ho_ten;
+                gvDbId = matchedT.id;
+                gvStk = matchedT.so_tai_khoan || '';
+                isNgoai = false;
+            } else {
+                actualId = `ngoai_${cleanName}`;
+                actualName = cleanName;
+                isNgoai = true;
+            }
         } else {
             actualId = pc.ma_gv_id;
             actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
             gvDbId = pc.ma_gv_id;
             gvStk = pc.giao_vien?.so_tai_khoan || '';
+            if (!gvStk && teacherNameMap[actualName.toLowerCase()]) {
+                gvStk = teacherNameMap[actualName.toLowerCase()].so_tai_khoan || '';
+            }
         }
 
         if (!gvMap[actualId]) gvMap[actualId] = {

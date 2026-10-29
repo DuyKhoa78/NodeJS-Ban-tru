@@ -867,6 +867,13 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     donGiaGsAn = parseFloat(dmMap['gs_an'].don_gia_mac_dinh);
   }
 
+  // Lấy danh sách giáo viên từ CSDL để chuẩn hóa tra cứu STK & ID
+  const allDbTeachers = await GiaoVien.findAll({ attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] });
+  const dbTeacherMap = {};
+  allDbTeachers.forEach((t) => {
+    dbTeacherMap[t.ho_ten.trim().toLowerCase()] = t;
+  });
+
   // 1. Phân công trực ăn - Chỉ lấy các cột cần thiết từ CSDL
   const phanCongAn = await PhanCongTrucGV.findAll({
     where: {
@@ -890,19 +897,33 @@ async function fetchAttendanceSourceData(startDate, endDate) {
   const seenAn = new Set();
   phanCongAn.forEach((pc) => {
     let gvId, name, stk = '', nhiemVu = 0;
-    if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
-      name = pc.ten_gv_truc_thay.trim();
-      gvId = `ext_${name}`;
-    } else if (pc.ma_gv_truc_thay_id) {
+    if (pc.ma_gv_truc_thay_id) {
       gvId = pc.ma_gv_truc_thay_id;
-      name = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+      name = pc.giao_vien_truc_thay?.ho_ten || pc.ten_gv_truc_thay?.trim() || `GV #${pc.ma_gv_truc_thay_id}`;
       stk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
       nhiemVu = pc.giao_vien_truc_thay?.nhiem_vu ?? 0;
+      if (!stk && dbTeacherMap[name.toLowerCase()]) {
+        stk = dbTeacherMap[name.toLowerCase()].so_tai_khoan || '';
+      }
+    } else if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+      name = pc.ten_gv_truc_thay.trim();
+      const matched = dbTeacherMap[name.toLowerCase()];
+      if (matched) {
+        gvId = matched.id;
+        name = matched.ho_ten;
+        stk = matched.so_tai_khoan || '';
+        nhiemVu = matched.nhiem_vu ?? 0;
+      } else {
+        gvId = `ext_${name}`;
+      }
     } else {
       gvId = pc.ma_gv_id;
       name = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
       stk = pc.giao_vien?.so_tai_khoan || '';
       nhiemVu = pc.giao_vien?.nhiem_vu ?? 0;
+      if (!stk && dbTeacherMap[name.toLowerCase()]) {
+        stk = dbTeacherMap[name.toLowerCase()].so_tai_khoan || '';
+      }
     }
 
     const key = `${gvId}_${pc.ngay}`;
@@ -953,17 +974,30 @@ async function fetchAttendanceSourceData(startDate, endDate) {
   const seenNgu = new Set();
   phanCongNgu.forEach((pc) => {
     let gvId, name, stk = '';
-    if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
-      name = pc.ten_gv_truc_thay.trim();
-      gvId = `ext_${name}`;
-    } else if (pc.ma_gv_truc_thay_id) {
+    if (pc.ma_gv_truc_thay_id) {
       gvId = pc.ma_gv_truc_thay_id;
-      name = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+      name = pc.giao_vien_truc_thay?.ho_ten || pc.ten_gv_truc_thay?.trim() || `GV #${pc.ma_gv_truc_thay_id}`;
       stk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
+      if (!stk && dbTeacherMap[name.toLowerCase()]) {
+        stk = dbTeacherMap[name.toLowerCase()].so_tai_khoan || '';
+      }
+    } else if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+      name = pc.ten_gv_truc_thay.trim();
+      const matched = dbTeacherMap[name.toLowerCase()];
+      if (matched) {
+        gvId = matched.id;
+        name = matched.ho_ten;
+        stk = matched.so_tai_khoan || '';
+      } else {
+        gvId = `ext_${name}`;
+      }
     } else {
       gvId = pc.ma_gv_id;
       name = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
       stk = pc.giao_vien?.so_tai_khoan || '';
+      if (!stk && dbTeacherMap[name.toLowerCase()]) {
+        stk = dbTeacherMap[name.toLowerCase()].so_tai_khoan || '';
+      }
     }
 
     const key = `${gvId}_${pc.ngay}`;
@@ -984,14 +1018,7 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     nguByGv[normKey].tien_ngu += donGiaNgu;
   });
 
-  // 3. Lấy danh sách giáo viên từ CSDL để bổ sung STK & ID
-  const allDbTeachers = await GiaoVien.findAll({ attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] });
-  const dbTeacherMap = {};
-  allDbTeachers.forEach((t) => {
-    dbTeacherMap[t.ho_ten.trim().toLowerCase()] = t;
-  });
-
-  // 4. Hợp nhất danh sách nhân sự từ BASELINE_STAFF_ALLOWANCES + Chấm công + Giáo viên
+  // 3. Hợp nhất danh sách nhân sự từ BASELINE_STAFF_ALLOWANCES + Chấm công + Giáo viên
   const personMap = {};
 
   // Thêm nhân sự gốc
