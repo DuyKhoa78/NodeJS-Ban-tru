@@ -52,12 +52,28 @@ router.post('/api/taikhoan/save/', loginRequired, roleRequired('admin'), async (
       return res.status(400).json({ ok: false, error: 'Role không hợp lệ' });
     }
 
-    const gvId = (role === 'giao_vien' || role === 'hoc_vu') && giao_vien_id ? parseInt(giao_vien_id, 10) : null;
+    const { GiaoVien } = require('../models');
+    let gvId = null;
+    if (role === 'giao_vien' || role === 'hoc_vu') {
+      if (giao_vien_id) {
+        gvId = parseInt(giao_vien_id, 10) || null;
+      } else if (fullname && fullname.trim()) {
+        const cleanFullName = fullname.trim().toLowerCase();
+        const allGvs = await GiaoVien.findAll({ attributes: ['id', 'ho_ten'], raw: true });
+        const matchedGv = allGvs.find((g) => g.ho_ten && g.ho_ten.trim().toLowerCase() === cleanFullName);
+        if (matchedGv) {
+          gvId = matchedGv.id;
+        }
+      }
+    }
 
     if (id) {
       // Update
       const user = await StaffUser.findByPk(id);
       if (!user) return res.status(404).json({ ok: false, error: 'Không tìm thấy tài khoản' });
+      if ((role === 'giao_vien' || role === 'hoc_vu') && gvId === null && giao_vien_id === undefined && user.giao_vien_id) {
+        gvId = user.giao_vien_id;
+      }
 
       // RÀNG BUỘC: Admin con (không phải Super Admin) không được chỉnh sửa tài khoản Super Admin
       if (user.is_superuser && !currentUser?.is_superuser) {

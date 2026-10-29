@@ -468,11 +468,8 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
     // Khi kỳ đang diễn ra (hoặc chưa chốt): Tính toán trực tiếp số tiền từ công trực CSDL và cấu hình đơn giá
     // Tính toán tức thì trong RAM (chỉ 2 câu SELECT thay vì 270 câu UPDATE qua mạng)
     if (ky.trang_thai !== 'da_chot') {
-      // Chỉ khởi tạo dữ liệu CSDL nếu kỳ chưa có bất kỳ chi tiết khoản chi nào (tránh làm chậm trang)
-      const countCt = await KeToanChiTietKhoanChi.count({ where: { ky_id: ky.id } });
-      if (countCt === 0) {
-        await ensureKyDataFromDb(ky);
-      }
+      // Đồng bộ tự động các thay đổi mới nhất từ lịch phân công & điểm danh (chỉ ghi DB những ô thực sự thay đổi)
+      await ensureKyDataFromDb(ky);
 
       const existingNguoiNhans = await KeToanNguoiNhan.findAll({
         where: { ky_id: ky.id },
@@ -547,6 +544,12 @@ router.get('/ky-tong-hop/:id', ketoanViewOrAdmin, async (req, res) => {
               ma_khoan_chi: ct.ma_khoan_chi,
               loai_tinh: ct.loai_tinh,
               tan_suat: ct.tan_suat || 'dinh_ky',
+              so_ngay: Math.round(parseFloat(ct.so_ngay) || 0),
+              don_gia: parseFloat(ct.don_gia) || 0,
+              tien_nguon: parseFloat(ct.tien_nguon) || 0,
+              tien_nhap: parseFloat(ct.tien_nhap) || 0,
+              tien_dieu_chinh: parseFloat(ct.tien_dieu_chinh) || 0,
+              ly_do_dieu_chinh: ct.ly_do_dieu_chinh || '',
               thanh_tien: parseFloat(ct.thanh_tien) || 0,
               ghi_chu: ct.ghi_chu || '',
             };
@@ -828,21 +831,38 @@ async function fetchAttendanceSourceData(startDate, endDate) {
   let donGiaYTe = 70000;
   let donGiaGsBanTru = 250000;
 
-  const cauHinh = await CauHinhHeThong.findOne();
+  const [cauHinh, chgNgu, dmList, allDbTeachers, phanCongAll] = await Promise.all([
+    CauHinhHeThong.findOne(),
+    CauHinhGia.findOne({
+      where: { loai_truc: 1, ngay_ap_dung: { [Op.lte]: endDate } },
+      order: [['ngay_ap_dung', 'DESC']],
+      raw: true,
+    }),
+    KeToanDanhMucKhoanChi.findAll().catch(() => []),
+    GiaoVien.findAll({ attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] }),
+    PhanCongTrucGV.findAll({
+      where: {
+        ngay: { [Op.between]: [startDate, endDate] },
+        loai_truc: { [Op.in]: [0, 1] },
+        xac_nhan_truc: { [Op.ne]: false },
+      },
+      attributes: ['id', 'ngay', 'loai_truc', 'ma_gv_id', 'ma_gv_truc_thay_id', 'ten_gv_truc_thay', 'nhiem_vu'],
+      include: [
+        { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
+        { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
+      ],
+      order: [['ngay', 'ASC']],
+    }),
+  ]);
+
   if (cauHinh) {
     if (cauHinh.phu_cap_gs_an) donGiaAn = parseInt(cauHinh.phu_cap_gs_an, 10) || 100000;
     if (cauHinh.phu_cap_y_te) donGiaYTe = parseInt(cauHinh.phu_cap_y_te, 10) || 70000;
     if (cauHinh.phu_cap_gs_ban_tru) donGiaGsBanTru = parseInt(cauHinh.phu_cap_gs_ban_tru, 10) || 250000;
   }
-  const chgNgu = await CauHinhGia.findOne({
-    where: { loai_truc: 1, ngay_ap_dung: { [Op.lte]: endDate } },
-    order: [['ngay_ap_dung', 'DESC']],
-    raw: true,
-  });
   if (chgNgu && chgNgu.don_gia) donGiaNgu = parseFloat(chgNgu.don_gia);
 
   // Đọc đơn giá chuẩn từ Danh mục khoản chi (Kế toán quản lý trực tiếp)
-  const dmList = await KeToanDanhMucKhoanChi.findAll().catch(() => []);
   const dmMap = {};
   dmList.forEach((d) => (dmMap[d.ma_khoan_chi] = d));
 
@@ -868,26 +888,14 @@ async function fetchAttendanceSourceData(startDate, endDate) {
   }
 
   // Lấy danh sách giáo viên từ CSDL để chuẩn hóa tra cứu STK & ID
-  const allDbTeachers = await GiaoVien.findAll({ attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] });
   const dbTeacherMap = {};
   allDbTeachers.forEach((t) => {
     dbTeacherMap[t.ho_ten.trim().toLowerCase()] = t;
   });
 
-  // 1. Phân công trực ăn - Chỉ lấy các cột cần thiết từ CSDL
-  const phanCongAn = await PhanCongTrucGV.findAll({
-    where: {
-      ngay: { [Op.between]: [startDate, endDate] },
-      loai_truc: 0,
-      xac_nhan_truc: { [Op.ne]: false },
-    },
-    attributes: ['id', 'ngay', 'loai_truc', 'ma_gv_id', 'ma_gv_truc_thay_id', 'ten_gv_truc_thay', 'nhiem_vu'],
-    include: [
-      { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
-      { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'] },
-    ],
-    order: [['ngay', 'ASC']],
-  });
+  // 1. Phân công trực ăn & ngủ
+  const phanCongAn = phanCongAll.filter((pc) => pc.loai_truc === 0);
+  const phanCongNgu = phanCongAll.filter((pc) => pc.loai_truc === 1);
 
   const activeDatesSet = new Set();
   phanCongAn.forEach((pc) => activeDatesSet.add(pc.ngay));
@@ -955,20 +963,7 @@ async function fetchAttendanceSourceData(startDate, endDate) {
     }
   });
 
-  // 2. Phân công trực ngủ - Chỉ lấy các cột cần thiết từ CSDL
-  const phanCongNgu = await PhanCongTrucGV.findAll({
-    where: {
-      ngay: { [Op.between]: [startDate, endDate] },
-      loai_truc: 1,
-      xac_nhan_truc: { [Op.ne]: false },
-    },
-    attributes: ['id', 'ngay', 'loai_truc', 'ma_gv_id', 'ma_gv_truc_thay_id', 'ten_gv_truc_thay'],
-    include: [
-      { association: 'giao_vien', attributes: ['id', 'ho_ten', 'so_tai_khoan'] },
-      { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten', 'so_tai_khoan'] },
-    ],
-    order: [['ngay', 'ASC']],
-  });
+  // 2. Phân công trực ngủ (đã lấy từ phanCongAll)
 
   const nguByGv = {};
   const seenNgu = new Set();
@@ -1173,30 +1168,40 @@ async function fetchAttendanceSourceData(startDate, endDate) {
 async function ensureKyDataFromDb(ky) {
   if (!ky || ky.trang_thai === 'da_chot') return;
 
-  const { sortedStaff, donGiaAn, donGiaNgu, donGiaYTe, donGiaGsBanTru, donGiaThietBi, donGiaGsAn, soNgayBanTru } = await fetchAttendanceSourceData(ky.tu_ngay, ky.den_ngay);
-  const allCategories = await KeToanDanhMucKhoanChi.findAll({ where: { kich_hoat: true } });
+  const [
+    { sortedStaff, donGiaAn, donGiaNgu, donGiaYTe, donGiaGsBanTru, donGiaThietBi, donGiaGsAn, soNgayBanTru },
+    allCategories,
+    priorKy,
+    existingNguoiNhans,
+  ] = await Promise.all([
+    fetchAttendanceSourceData(ky.tu_ngay, ky.den_ngay),
+    KeToanDanhMucKhoanChi.findAll({ where: { kich_hoat: true } }),
+    KeToanKyTongHop.findOne({
+      where: {
+        id: { [Op.ne]: ky.id },
+        [Op.or]: [
+          { den_ngay: { [Op.lte]: ky.tu_ngay } },
+          { id: { [Op.lt]: ky.id } },
+        ],
+      },
+      order: [['den_ngay', 'DESC'], ['id', 'DESC']],
+      include: [
+        {
+          model: KeToanNguoiNhan,
+          as: 'danh_sach_nguoi_nhan',
+          include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
+        },
+      ],
+    }),
+    KeToanNguoiNhan.findAll({
+      where: { ky_id: ky.id },
+      include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
+    }),
+  ]);
+
   const catMap = {};
   allCategories.forEach((c) => {
     catMap[c.ma_khoan_chi] = c;
-  });
-
-  // Tìm kỳ trước gần nhất để kế thừa các khoản định kỳ
-  const priorKy = await KeToanKyTongHop.findOne({
-    where: {
-      id: { [Op.ne]: ky.id },
-      [Op.or]: [
-        { den_ngay: { [Op.lte]: ky.tu_ngay } },
-        { id: { [Op.lt]: ky.id } },
-      ],
-    },
-    order: [['den_ngay', 'DESC'], ['id', 'DESC']],
-    include: [
-      {
-        model: KeToanNguoiNhan,
-        as: 'danh_sach_nguoi_nhan',
-        include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
-      },
-    ],
   });
 
   const prevKyDetailsByPerson = {};
@@ -1214,11 +1219,6 @@ async function ensureKyDataFromDb(ky) {
     });
   }
 
-  const existingNguoiNhans = await KeToanNguoiNhan.findAll({
-    where: { ky_id: ky.id },
-    include: [{ model: KeToanChiTietKhoanChi, as: 'chi_tiet_khoan_chi' }],
-  });
-
   const nnByName = {};
   const ctMapByNnAndCol = new Map();
   existingNguoiNhans.forEach((nn) => {
@@ -1229,6 +1229,7 @@ async function ensureKyDataFromDb(ky) {
   });
 
   const toCreateCts = [];
+  let anyChanged = false;
 
   for (let idx = 0; idx < sortedStaff.length; idx++) {
     const person = sortedStaff[idx];
@@ -1250,6 +1251,7 @@ async function ensureKyDataFromDb(ky) {
         trang_thai_tt: 'chua_chi',
       });
       nnByName[clean] = nn;
+      anyChanged = true;
     } else {
       const updateFields = {};
       if (nn.stt !== idx + 1) updateFields.stt = idx + 1;
@@ -1261,6 +1263,7 @@ async function ensureKyDataFromDb(ky) {
       }
       if (Object.keys(updateFields).length > 0) {
         await nn.update(updateFields);
+        anyChanged = true;
       }
     }
 
@@ -1328,7 +1331,7 @@ async function ensureKyDataFromDb(ky) {
 
       if (ct) {
         if (
-          ct.so_ngay !== soNgay ||
+          Math.round(parseFloat(ct.so_ngay) || 0) !== soNgay ||
           parseFloat(ct.don_gia) !== donGia ||
           parseFloat(ct.tien_nguon) !== tienNguon ||
           parseFloat(ct.tien_nhap) !== tienNhap ||
@@ -1344,6 +1347,7 @@ async function ensureKyDataFromDb(ky) {
             tan_suat: tanSuat,
             nguon_cap_nhat: 'csdl_tu_dong',
           });
+          anyChanged = true;
         }
       } else if (thanhTien > 0 || soNgay > 0) {
         toCreateCts.push({
@@ -1369,7 +1373,9 @@ async function ensureKyDataFromDb(ky) {
     await KeToanChiTietKhoanChi.bulkCreate(toCreateCts);
   }
 
-  await recalculateKyTotals(ky.id);
+  if (anyChanged || toCreateCts.length > 0 || !(parseFloat(ky.tong_tien) > 0)) {
+    await recalculateKyTotals(ky.id);
+  }
 }
 
 // POST /api/ketoan/ky-tong-hop/:id/dong-bo-nguon
@@ -1502,6 +1508,9 @@ router.post('/ky-tong-hop/:id/dong-bo-nguon', ketoanOrAdmin, async (req, res) =>
         }
 
         // Cập nhật từng khoản chi cho người nhận
+        const isMaiQuynhChau = clean.includes('mai quỳnh châu') || clean.includes('quỳnh châu') || clean === 'châu' || clean.endsWith(' châu');
+        const isNhatTan = clean.includes('nhật tân') || clean.includes('trần nhật tân');
+
         for (const maKhoanChi of Object.keys(person.amounts)) {
           const cat = catMap[maKhoanChi];
           if (!cat) continue;
@@ -1509,12 +1518,24 @@ router.post('/ky-tong-hop/:id/dong-bo-nguon', ketoanOrAdmin, async (req, res) =>
           const newTienNguon = person.amounts[maKhoanChi] || 0;
           let ct = ctMapByNnAndCol.get(`${nn.id}_${maKhoanChi}`);
 
-          const newSoNgay =
-            maKhoanChi === 'truc_phong'
-              ? person.counts.so_ca_ngu
-              : maKhoanChi === 'y_te' || maKhoanChi === 'gs_ban_tru'
-              ? person.counts.so_ngay_ban_tru
-              : (ct ? ct.so_ngay : 0);
+          let newSoNgay = ct ? Math.round(parseFloat(ct.so_ngay) || 0) : 0;
+          if (maKhoanChi === 'truc_phong') {
+            newSoNgay = person.counts.so_ca_ngu || 0;
+          } else if (maKhoanChi === 'bt_an') {
+            newSoNgay = isMaiQuynhChau ? 0 : (person.counts.so_ca_an || 0);
+          } else if (maKhoanChi === 'gs_an') {
+            newSoNgay = isMaiQuynhChau ? (soNgayBanTru || 0) : (person.counts.so_ca_gs_an || 0);
+          } else if (maKhoanChi === 'thiet_bi') {
+            newSoNgay = isNhatTan ? (soNgayBanTru || 0) : 0;
+          } else if (maKhoanChi === 'y_te') {
+            newSoNgay = isMaiQuynhChau ? (soNgayBanTru || 0) : 0;
+          } else if (maKhoanChi === 'gs_ban_tru') {
+            if (clean.includes('đức vịnh')) {
+              newSoNgay = 9;
+            } else if (clean.includes('quốc phong')) {
+              newSoNgay = soNgayBanTru || 0;
+            }
+          }
 
           if (ct) {
             const tienDieuChinh = parseFloat(ct.tien_dieu_chinh) || 0;
@@ -1522,7 +1543,7 @@ router.post('/ky-tong-hop/:id/dong-bo-nguon', ketoanOrAdmin, async (req, res) =>
             if (
               parseFloat(ct.tien_nguon) !== newTienNguon ||
               parseFloat(ct.thanh_tien) !== newThanhTien ||
-              ct.so_ngay !== newSoNgay
+              Math.round(parseFloat(ct.so_ngay) || 0) !== newSoNgay
             ) {
               await ct.update(
                 {
@@ -2191,7 +2212,7 @@ const handleChotKy = async (req, res) => {
     }));
 
     // 2. Tính toán và lưu snapshot dữ liệu người nhận và chi tiết khoản chi vào CSDL
-    const { sortedStaff } = await fetchAttendanceSourceData(tuNgayChot, denNgayChot);
+    const { sortedStaff, soNgayBanTru } = await fetchAttendanceSourceData(tuNgayChot, denNgayChot);
     let totalAll = 0;
 
     for (let idx = 0; idx < sortedStaff.length; idx++) {
@@ -2211,14 +2232,30 @@ const handleChotKy = async (req, res) => {
         },
       });
 
+      const cleanName = p.ho_ten.trim().toLowerCase();
+      const isMaiQuynhChau = cleanName.includes('mai quỳnh châu') || cleanName.includes('quỳnh châu') || cleanName === 'châu' || cleanName.endsWith(' châu');
+      const isNhatTan = cleanName.includes('nhật tân') || cleanName.includes('trần nhật tân');
+
       let rowTotal = 0;
       for (const col of dmList) {
         const isStrictLocked = ['truc_phong', 'bt_an', 'gs_an'].includes(col.ma_khoan_chi);
-        const cleanName = p.ho_ten.trim().toLowerCase();
         const isHuynhDucVinhGs = (cleanName.includes('huỳnh đức vịnh') || cleanName.includes('đức vịnh')) && col.ma_khoan_chi === 'gs_ban_tru';
 
         let amt = p.amounts[col.ma_khoan_chi] || 0;
-        let soNgay = col.ma_khoan_chi === 'truc_phong' ? p.counts.so_ca_ngu : (col.ma_khoan_chi === 'bt_an' ? p.counts.so_ca_an : p.counts.so_ngay_ban_tru);
+        let soNgay = 0;
+        if (col.ma_khoan_chi === 'truc_phong') {
+          soNgay = p.counts.so_ca_ngu || 0;
+        } else if (col.ma_khoan_chi === 'bt_an') {
+          soNgay = isMaiQuynhChau ? 0 : (p.counts.so_ca_an || 0);
+        } else if (col.ma_khoan_chi === 'gs_an') {
+          soNgay = isMaiQuynhChau ? (soNgayBanTru || 0) : (p.counts.so_ca_gs_an || 0);
+        } else if (col.ma_khoan_chi === 'thiet_bi') {
+          soNgay = isNhatTan ? (soNgayBanTru || 0) : 0;
+        } else if (col.ma_khoan_chi === 'y_te') {
+          soNgay = isMaiQuynhChau ? (soNgayBanTru || 0) : 0;
+        } else if (col.ma_khoan_chi === 'gs_ban_tru') {
+          soNgay = isHuynhDucVinhGs ? 9 : (cleanName.includes('quốc phong') ? (soNgayBanTru || 0) : 0);
+        }
         let donGia = col.don_gia_mac_dinh;
         let tienNhap = 0;
         let tienDieuChinh = 0;
@@ -2344,6 +2381,7 @@ const handleChotKy = async (req, res) => {
           created_by_id: user.id || null,
           created_by_name: user.fullname || user.username || 'Kế toán',
         });
+        await ensureKyDataFromDb(nextKy);
       }
 
       const existingNextKyTruc = await KyTrucGV.findOne({

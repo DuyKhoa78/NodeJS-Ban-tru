@@ -3710,7 +3710,9 @@ router.get('/api/baocao/suat-an-thang/', loginRequired, async (req, res) => {
 
         const dateSet = new Set();
         pcAn.forEach(r => { if (r.ngay) dateSet.add(r.ngay); });
-        ddDates.forEach(r => { if (r.ngay) dateSet.add(r.ngay); });
+        if (dateSet.size === 0) {
+            ddDates.forEach(r => { if (r.ngay) dateSet.add(r.ngay); });
+        }
 
         // Nếu chưa có lịch phân công hoặc điểm danh, tự động lấy các ngày trong tuần (T2 - T6) không bị cấu hình nghỉ
         if (dateSet.size === 0) {
@@ -4158,25 +4160,45 @@ router.get('/api/baocao/cong-an-chi-tiet/', loginRequired, roleRequired('admin',
         });
 
         // Nhóm theo giáo viên (mỗi ngày mỗi GV tính tối đa 1 ca)
+        const allTeachers = await GiaoVien.findAll({
+            attributes: ['id', 'ho_ten', 'so_tai_khoan', 'nhiem_vu'],
+            raw: true
+        });
+        const teacherNameMap = {};
+        allTeachers.forEach(t => {
+            if (t.ho_ten) teacherNameMap[t.ho_ten.trim().toLowerCase()] = t;
+        });
+
         const gvMap = {};
         const seenShift = new Set();
 
         phanCong.forEach(pc => {
             let actualId, actualName, isNgoai = false, gvDbId = null, gvStk = '', nhiemVu = 0;
-            if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
-                const cleanName = pc.ten_gv_truc_thay.trim();
-                actualId = `ngoai_${cleanName}`;
-                actualName = cleanName;
-                isNgoai = true;
-                nhiemVu = 0;
-            } else if (pc.ma_gv_truc_thay_id) {
+            if (pc.ma_gv_truc_thay_id) {
                 actualId = pc.ma_gv_truc_thay_id;
-                actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+                actualName = pc.giao_vien_truc_thay?.ho_ten || (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) || `GV #${pc.ma_gv_truc_thay_id}`;
                 gvDbId = pc.ma_gv_truc_thay_id;
                 gvStk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
                 nhiemVu = pc.giao_vien_truc_thay?.nhiem_vu !== undefined && pc.giao_vien_truc_thay?.nhiem_vu !== null
                     ? pc.giao_vien_truc_thay.nhiem_vu
                     : (pc.nhiem_vu ?? 0);
+            } else if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+                const cleanName = pc.ten_gv_truc_thay.trim();
+                const matchedTeacher = teacherNameMap[cleanName.toLowerCase()];
+                if (matchedTeacher) {
+                    actualId = matchedTeacher.id;
+                    actualName = matchedTeacher.ho_ten;
+                    gvDbId = matchedTeacher.id;
+                    gvStk = matchedTeacher.so_tai_khoan || '';
+                    nhiemVu = matchedTeacher.nhiem_vu !== undefined && matchedTeacher.nhiem_vu !== null
+                        ? matchedTeacher.nhiem_vu
+                        : (pc.nhiem_vu ?? 0);
+                } else {
+                    actualId = `ngoai_${cleanName}`;
+                    actualName = cleanName;
+                    isNgoai = true;
+                    nhiemVu = 0;
+                }
             } else {
                 actualId = pc.ma_gv_id;
                 actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
@@ -4274,15 +4296,24 @@ router.get('/api/baocao/cong-an-chi-tiet/', loginRequired, roleRequired('admin',
         const seenShiftNgu = new Set();
         phanCongNgu.forEach(pc => {
             let actualId, actualName, isNgoai = false, gvDbId = null, gvStk = '';
-            if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
-                actualName = pc.ten_gv_truc_thay.trim();
-                actualId = `ngoai_${actualName}`;
-                isNgoai = true;
-            } else if (pc.ma_gv_truc_thay_id) {
+            if (pc.ma_gv_truc_thay_id) {
                 actualId = pc.ma_gv_truc_thay_id;
-                actualName = pc.giao_vien_truc_thay?.ho_ten || `GV #${pc.ma_gv_truc_thay_id}`;
+                actualName = pc.giao_vien_truc_thay?.ho_ten || (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) || `GV #${pc.ma_gv_truc_thay_id}`;
                 gvDbId = pc.ma_gv_truc_thay_id;
                 gvStk = pc.giao_vien_truc_thay?.so_tai_khoan || '';
+            } else if (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim()) {
+                const cleanName = pc.ten_gv_truc_thay.trim();
+                const matchedTeacher = teacherNameMap[cleanName.toLowerCase()];
+                if (matchedTeacher) {
+                    actualId = matchedTeacher.id;
+                    actualName = matchedTeacher.ho_ten;
+                    gvDbId = matchedTeacher.id;
+                    gvStk = matchedTeacher.so_tai_khoan || '';
+                } else {
+                    actualName = cleanName;
+                    actualId = `ngoai_${actualName}`;
+                    isNgoai = true;
+                }
             } else {
                 actualId = pc.ma_gv_id;
                 actualName = pc.giao_vien?.ho_ten || `GV #${pc.ma_gv_id}`;
@@ -5118,10 +5149,10 @@ router.get('/api/lichtruc/export/', loginRequired, roleRequired('admin', 'quan_l
         for (const r of records) {
             const row = ws.getRow(rowIdx++);
             let nguoiThucTe = r.giao_vien?.ho_ten || '';
-            if (r.ten_gv_truc_thay && r.ten_gv_truc_thay.trim()) {
-                nguoiThucTe = `${r.ten_gv_truc_thay.trim()} (Ngoài DS trực thay)`;
-            } else if (r.giao_vien_truc_thay) {
+            if (r.giao_vien_truc_thay) {
                 nguoiThucTe = `${r.giao_vien_truc_thay.ho_ten} (Trực thay)`;
+            } else if (r.ten_gv_truc_thay && r.ten_gv_truc_thay.trim()) {
+                nguoiThucTe = `${r.ten_gv_truc_thay.trim()} (Ngoài DS trực thay)`;
             }
             row.values = [r.ngay, r.phong?.ma_phong, r.loai_truc === 0 ? 'Ăn' : 'Ngủ', r.giao_vien?.ho_ten, nguoiThucTe];
             row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: r.loai_truc === 0 ? 'FFfef3c7' : 'FFede9fe' } };
