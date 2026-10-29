@@ -579,7 +579,15 @@ function parseSanhSubChotMap(ghiChuChot) {
     const regex = /\[SANH_([123]):([^\]]+)\]/g;
     let m;
     while ((m = regex.exec(String(ghiChuChot))) !== null) {
-        map[parseInt(m[1], 10)] = m[2].trim();
+        const rawContent = m[2].trim();
+        const atIdx = rawContent.indexOf('@');
+        if (atIdx !== -1) {
+            map[parseInt(m[1], 10)] = rawContent.substring(0, atIdx).trim();
+            if (!map._times) map._times = {};
+            map._times[parseInt(m[1], 10)] = rawContent.substring(atIdx + 1).trim();
+        } else {
+            map[parseInt(m[1], 10)] = rawContent;
+        }
     }
     return map;
 }
@@ -587,7 +595,10 @@ function parseSanhSubChotMap(ghiChuChot) {
 function buildSanhGhiChuChot(subChotMap, extraNote) {
     const tags = [1, 2, 3]
         .filter(g => subChotMap[g])
-        .map(g => `[SANH_${g}:${subChotMap[g]}]`)
+        .map(g => {
+            const timePart = subChotMap._times?.[g] ? `@${subChotMap._times[g]}` : '';
+            return `[SANH_${g}:${subChotMap[g]}${timePart}]`;
+        })
         .join(' ');
     const cleanNote = String(extraNote || '').replace(/\[SANH_[123]:[^\]]+\]/g, '').replace(/^\s*\|\s*/, '').trim();
     if (tags && cleanNote) return `${tags} | ${cleanNote}`;
@@ -595,10 +606,11 @@ function buildSanhGhiChuChot(subChotMap, extraNote) {
 }
 
 function isSanhSubRoomChot(ddpRecord, groupNum) {
-    if (!ddpRecord) return { isChot: false, tenNguoiChot: null, isAutoChot: false };
+    if (!ddpRecord) return { isChot: false, tenNguoiChot: null, isAutoChot: false, thoiGian: null };
     const subMap = parseSanhSubChotMap(ddpRecord.ghi_chu_chot);
     if (subMap[groupNum]) {
-        return { isChot: true, tenNguoiChot: subMap[groupNum], isAutoChot: false };
+        const timeVal = subMap._times?.[groupNum] ? new Date(subMap._times[groupNum]) : ddpRecord.thoi_gian;
+        return { isChot: true, tenNguoiChot: subMap[groupNum], isAutoChot: false, thoiGian: timeVal };
     }
     const isWholeCompleted = ddpRecord.trang_thai_chot === 'da_chot' || Boolean(ddpRecord.da_diem_danh);
     if (isWholeCompleted) {
@@ -607,9 +619,10 @@ function isSanhSubRoomChot(ddpRecord, groupNum) {
             isChot: true,
             tenNguoiChot: isAuto ? 'Hệ thống' : (ddpRecord.ten_nguoi_chot || null),
             isAutoChot: isAuto,
+            thoiGian: ddpRecord.thoi_gian,
         };
     }
-    return { isChot: false, tenNguoiChot: null, isAutoChot: false };
+    return { isChot: false, tenNguoiChot: null, isAutoChot: false, thoiGian: null };
 }
 
 /** GET /api/diemdanh/?ngay=&loai= */
@@ -654,6 +667,10 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
             } else if (item.ma_gv_chot_id === null && (item.trang_thai_chot === 'da_chot' || item.da_diem_danh)) {
                 tenNguoiChot = 'Hệ thống';
             }
+            if (!tenNguoiChot && item.ghi_chu_chot) {
+                const mGv = item.ghi_chu_chot.match(/bởi GV\s+([^|,\n]+)/i);
+                if (mGv) tenNguoiChot = mGv[1].trim();
+            }
             const isCompleted = item.trang_thai_chot === 'da_chot' || Boolean(item.da_diem_danh);
             const isAutoChot = Boolean(isCompleted && (item.ma_gv_chot_id === null || tenNguoiChot === 'Hệ thống' || item.ghi_chu_chot?.includes('Hệ thống')));
             const isGvChot = Boolean(isCompleted && !isAutoChot);
@@ -677,9 +694,13 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
                             ma_phong_id: `SANH_${g}`,
                             da_diem_danh: true,
                             trang_thai_chot: 'da_chot',
+                            thoi_gian: subCheck.thoiGian || sanhPs.thoi_gian,
                             ten_nguoi_chot: subCheck.tenNguoiChot || sanhPs.ten_nguoi_chot,
                             is_auto_chot: subCheck.isAutoChot,
                             is_gv_chot: !subCheck.isAutoChot,
+                            ghi_chu_chot: !subCheck.isAutoChot
+                                ? `Chốt bởi GV ${subCheck.tenNguoiChot}`
+                                : (subCheck.tenNguoiChot === 'Hệ thống' ? 'Hệ thống tự động chốt' : sanhPs.ghi_chu_chot),
                             nguoi_chot: subCheck.tenNguoiChot
                                 ? { ...(sanhPs.nguoi_chot || {}), fullname: subCheck.tenNguoiChot }
                                 : sanhPs.nguoi_chot
@@ -1896,6 +1917,8 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 const subChotMap = parseSanhSubChotMap(existingDdp?.ghi_chu_chot);
                 const gvDisplayName = req.user.fullname || req.user.username || 'Giáo viên';
                 subChotMap[subInfo.groupNum] = gvDisplayName;
+                if (!subChotMap._times) subChotMap._times = {};
+                subChotMap._times[subInfo.groupNum] = new Date().toISOString();
                 const allThreeDone = Boolean(subChotMap[1] && subChotMap[2] && subChotMap[3]);
                 finalDaDiemDanh = allThreeDone;
                 finalTrangThaiChot = allThreeDone ? 'da_chot' : 'dang_chot';
@@ -2146,7 +2169,11 @@ router.get('/api/baocao/tinh-hinh-chot-phong/', loginRequired, async (req, res) 
                 : 0;
 
             const isCompleted = ps?.trang_thai_chot === 'da_chot' || Boolean(ps?.da_diem_danh);
-            const tenGvChot = ps?.ma_gv_chot_id ? (gvNameMap[ps.ma_gv_chot_id] || null) : null;
+            let tenGvChot = ps?.ma_gv_chot_id ? (gvNameMap[ps.ma_gv_chot_id] || null) : null;
+            if (!tenGvChot && ps?.ghi_chu_chot) {
+                const mGv = ps.ghi_chu_chot.match(/bởi GV\s+([^|,\n]+)/i);
+                if (mGv) tenGvChot = mGv[1].trim();
+            }
             const isAutoChot = Boolean(isCompleted && (ps?.ma_gv_chot_id === null || !tenGvChot || ps?.ghi_chu_chot?.includes('Hệ thống')));
             const isGvChot = Boolean(isCompleted && !isAutoChot);
 
