@@ -642,7 +642,8 @@ function isSanhSubRoomChot(ddpRecord, groupNum) {
     }
     const isWholeCompleted = ddpRecord.trang_thai_chot === 'da_chot' || Boolean(ddpRecord.da_diem_danh);
     if (isWholeCompleted) {
-        const isAuto = Boolean(ddpRecord.ghi_chu_chot?.includes('Hệ thống') || ddpRecord.ma_gv_chot_id === null);
+        const hasAnySubTag = Boolean(subMap[1] || subMap[2] || subMap[3]);
+        const isAuto = Boolean(hasAnySubTag || ddpRecord.ghi_chu_chot?.includes('Hệ thống') || ddpRecord.ma_gv_chot_id === null);
         return {
             isChot: true,
             tenNguoiChot: isAuto ? 'Hệ thống' : (ddpRecord.ten_nguoi_chot || null),
@@ -700,12 +701,65 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
                 if (mGv) tenNguoiChot = mGv[1].trim();
             }
             const isCompleted = item.trang_thai_chot === 'da_chot' || Boolean(item.da_diem_danh);
+
+            // Riêng phòng ăn SANH có 3 GV phụ trách 3 danh sách (SANH_1, SANH_2, SANH_3):
+            // - Đủ 3/3 người chốt (hoặc Admin chốt trực tiếp cả phòng SANH): màu xanh (is_gv_chot = true)
+            // - Mới có 1/3 hoặc 2/3 người chốt (thiếu 1-2 người): màu vàng (is_partial_chot = true, hiện tên người đã chốt)
+            // - Chưa ai chốt (0/3) và hệ thống tự chốt khi hết giờ: màu đỏ (is_auto_chot = true)
+            if (loaiTrucQuery === 0 && item.ma_phong_id === 'SANH') {
+                const subMap = parseSanhSubChotMap(item.ghi_chu_chot);
+                const chotGroups = [1, 2, 3].filter(g => Boolean(subMap[g]));
+                const subCount = chotGroups.length;
+                const subNames = [...new Set(chotGroups.map(g => subMap[g]))].join(', ');
+                const latestSubTime = chotGroups.map(g => subMap._times?.[g]).filter(Boolean).sort().pop();
+
+                if (subCount === 3) {
+                    return {
+                        ...item,
+                        ten_nguoi_chot: subNames,
+                        thoi_gian: latestSubTime ? new Date(latestSubTime) : item.thoi_gian,
+                        nguoi_chot: { ...(item.nguoi_chot || {}), fullname: subNames },
+                        is_auto_chot: false,
+                        is_partial_chot: false,
+                        is_gv_chot: true,
+                        sanh_chot_count: 3,
+                        sanh_total_sub: 3
+                    };
+                }
+                if (subCount === 1 || subCount === 2) {
+                    return {
+                        ...item,
+                        ten_nguoi_chot: subNames,
+                        thoi_gian: latestSubTime ? new Date(latestSubTime) : item.thoi_gian,
+                        nguoi_chot: { ...(item.nguoi_chot || {}), fullname: subNames },
+                        is_auto_chot: false,
+                        is_partial_chot: true,
+                        is_gv_chot: false,
+                        sanh_chot_count: subCount,
+                        sanh_total_sub: 3
+                    };
+                }
+                // subCount === 0
+                const isAutoSanh = Boolean(isCompleted && (item.ma_gv_chot_id === null || tenNguoiChot === 'Hệ thống' || item.ghi_chu_chot?.includes('Hệ thống')));
+                const isGvSanh = Boolean(isCompleted && !isAutoSanh);
+                return {
+                    ...item,
+                    ten_nguoi_chot: isAutoSanh ? 'Hệ thống' : tenNguoiChot,
+                    is_auto_chot: isAutoSanh,
+                    is_partial_chot: false,
+                    is_gv_chot: isGvSanh,
+                    sanh_chot_count: isGvSanh ? 3 : 0,
+                    sanh_total_sub: 3
+                };
+            }
+
             const isAutoChot = Boolean(isCompleted && (item.ma_gv_chot_id === null || tenNguoiChot === 'Hệ thống' || item.ghi_chu_chot?.includes('Hệ thống')));
             const isGvChot = Boolean(isCompleted && !isAutoChot);
             return {
                 ...item,
                 ten_nguoi_chot: tenNguoiChot,
                 is_auto_chot: isAutoChot,
+                is_partial_chot: false,
                 is_gv_chot: isGvChot
             };
         });
@@ -725,6 +779,7 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
                             thoi_gian: subCheck.thoiGian || sanhPs.thoi_gian,
                             ten_nguoi_chot: subCheck.tenNguoiChot || sanhPs.ten_nguoi_chot,
                             is_auto_chot: subCheck.isAutoChot,
+                            is_partial_chot: false,
                             is_gv_chot: !subCheck.isAutoChot,
                             ghi_chu_chot: !subCheck.isAutoChot
                                 ? `Chốt bởi GV ${subCheck.tenNguoiChot}`
@@ -1003,8 +1058,9 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 return res.json({ ok: true, message: 'Không có bản ghi điểm danh nào cần cập nhật' });
             }
 
-            // Quy định: Giáo viên khi điểm danh không được ghi phép (chỉ có Admin/Học vụ mới có quyền báo phép)
-            if (req.user.role === 'giao_vien') {
+            // Quy định: Chỉ duy nhất Admin mới có quyền báo phép / ghi phép (2)
+            const isAdminUser = Boolean(req.user.role === 'admin' || req.user.is_superuser || req.user.is_admin);
+            if (!isAdminUser) {
                 const existingPhepList = await DiemDanhHS.findAll({
                     where: {
                         ma_hs_id: { [Op.in]: validRecords.map(r => r.ma_hs) },
@@ -1021,10 +1077,10 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                         await t.rollback();
                         return res.status(403).json({
                             ok: false,
-                            error: 'Giáo viên không có quyền ghi phép cho học sinh khi điểm danh. Thao tác báo nghỉ phép do Ban quản lý/Admin phụ trách.'
+                            error: 'Chỉ Admin mới có quyền ghi phép cho học sinh khi điểm danh.'
                         });
                     }
-                    // Nếu học sinh đã có phép do Admin duyệt trước đó, giáo viên không thể thay đổi
+                    // Nếu học sinh đã có phép do Admin duyệt trước đó, nhân sự khác không thể thay đổi
                     if (phepSet.has(r.ma_hs) && r.status !== 2) {
                         r.status = 2;
                     }
@@ -1059,7 +1115,7 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
 });
 
 /** POST /api/diemdanh/bao-phep-truoc/ - Báo vắng phép trước cho HS mà không tự động đổi các bạn khác thành Có mặt */
-router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly'), async (req, res) => {
+router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'), async (req, res) => {
     try {
         const { ma_hs_list, tu_ngay, den_ngay, ca, ghi_chu } = req.body;
         if (!ma_hs_list || !Array.isArray(ma_hs_list) || ma_hs_list.length === 0) {
@@ -1178,7 +1234,7 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
 });
 
 /** POST /api/diemdanh/huy-phep/ - Hủy báo vắng phép cho HS */
-router.post('/api/diemdanh/huy-phep/', loginRequired, roleRequired('admin', 'hoc_vu', 'quan_ly'), async (req, res) => {
+router.post('/api/diemdanh/huy-phep/', loginRequired, roleRequired('admin'), async (req, res) => {
     try {
         const { ma_hs_id, ngay, ca } = req.body;
         if (!ma_hs_id || !ngay) {
@@ -1499,10 +1555,26 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             }
 
             let isChot = Boolean(phongStatus && (phongStatus.trang_thai_chot === 'da_chot' || phongStatus.da_diem_danh));
-            if (!isChot && maPhong === 'SANH' && loaiTruc === 0 && phongStatus?.ghi_chu_chot) {
+            let isGvChotAssignment = Boolean(isChot && phongStatus?.ma_gv_chot_id !== null && !phongStatus?.ghi_chu_chot?.includes('Hệ thống'));
+            let isAutoChotAssignment = Boolean(isChot && !isGvChotAssignment);
+
+            if (maPhong === 'SANH' && loaiTruc === 0 && phongStatus) {
                 const subMap = parseSanhSubChotMap(phongStatus.ghi_chu_chot);
-                if (gvNameForReport && Object.values(subMap).some(n => n.toLowerCase() === gvNameForReport.toLowerCase())) {
+                const chotGroups = [1, 2, 3].filter(g => Boolean(subMap[g]));
+                const gvChotInSanh = Boolean(
+                    gvNameForReport &&
+                    chotGroups.some(g => String(subMap[g] || '').trim().toLowerCase() === gvNameForReport.trim().toLowerCase())
+                );
+                if (gvChotInSanh) {
                     isChot = true;
+                    isGvChotAssignment = true;
+                    isAutoChotAssignment = false;
+                } else if (chotGroups.length > 0) {
+                    // Đã có GV khác chốt danh sách Sảnh của họ, nhưng GV này chưa chốt danh sách của mình
+                    const wholeCompleted = phongStatus.trang_thai_chot === 'da_chot' || Boolean(phongStatus.da_diem_danh);
+                    isChot = wholeCompleted;
+                    isGvChotAssignment = false;
+                    isAutoChotAssignment = wholeCompleted;
                 }
             }
             const isAdmin = req.user.role === 'admin' || req.user.role === 'quan_ly' || req.user.is_superuser;
@@ -1542,8 +1614,8 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
                 trang_thai_chot: phongStatus?.trang_thai_chot || 'chua_chot',
                 da_diem_danh: Boolean(phongStatus?.da_diem_danh),
                 is_chot: isChot,
-                is_auto_chot: Boolean(isChot && (phongStatus?.ma_gv_chot_id === null || phongStatus?.ghi_chu_chot?.includes('Hệ thống'))),
-                is_gv_chot: Boolean(isChot && phongStatus?.ma_gv_chot_id !== null && !phongStatus?.ghi_chu_chot?.includes('Hệ thống')),
+                is_auto_chot: isAutoChotAssignment,
+                is_gv_chot: isGvChotAssignment,
                 ma_gv_chot_id: phongStatus?.ma_gv_chot_id || null,
                 thoi_gian_chot: phongStatus?.thoi_gian || null,
                 ghi_chu_chot: phongStatus?.ghi_chu_chot || null,
@@ -1635,7 +1707,8 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
         }
 
         let cleanList = Array.isArray(danh_sach_hs) ? danh_sach_hs : [];
-        if (req.user.role === 'giao_vien') {
+        const isAdminUser = Boolean(req.user.role === 'admin' || req.user.is_superuser || req.user.is_admin);
+        if (!isAdminUser) {
             const fieldStatus = loaiTrucNum === 0 ? 'diem_danh_an' : 'diem_danh_ngu';
             const hsPhep = await DiemDanhHS.findAll({
                 where: {
@@ -1903,13 +1976,14 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 let thoiGian = new Date();
 
                 // Ưu tiên 1: Đã được báo Phép trước đó
+                const isAdminUser = Boolean(req.user.role === 'admin' || req.user.is_superuser || req.user.is_admin);
                 if (ex && ex[fieldStatus] === 2) {
                     finalStatus = 2;
                     phuongThuc = ex[fieldPhuongThuc] || 'phep';
                     thoiGian = ex[fieldThoiGian] || new Date();
                 } else if (sc) {
-                    if (req.user.role === 'giao_vien' && sc.status === 2) {
-                        finalStatus = 1; // Giáo viên không được tự gán phép nếu chưa được Admin duyệt phép từ trước
+                    if (!isAdminUser && sc.status === 2) {
+                        finalStatus = 1; // Chỉ Admin mới được gán phép nếu chưa được duyệt phép từ trước
                     } else {
                         finalStatus = sc.status; // 0=Có mặt, 1=Vắng, 2=Phép
                     }
