@@ -5712,8 +5712,9 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
         // Lấy cấu hình hệ thống
         const heThong = await CauHinhHeThong.findByPk(1);
 
-        // Lấy danh sách tất cả phòng để kiểm tra tiến độ nộp báo cáo
+        // Lấy danh sách tất cả phòng đang dùng để kiểm tra tiến độ nộp báo cáo
         const allPhong = await Phong.findAll({
+            where: { dang_dung: true },
             attributes: ['ma_phong', 'loai_phong', 'suc_chua'],
             order: [['loai_phong', 'ASC'], ['ma_phong', 'ASC']],
         });
@@ -5764,15 +5765,17 @@ router.get('/api/baocaotruc/', loginRequired, async (req, res) => {
             return plain;
         });
 
-        // Hàm kiểm tra một phòng có được báo cáo bao phủ (kể cả trường hợp gộp cụm như D21, D22, D23 hay P6, P7, P8)
+        // Hàm kiểm tra một phòng có được báo cáo bao phủ (kể cả trường hợp gộp cụm như D21, D22, D23 hay P6, P7, P8 hoặc biến thể A20/HTA20)
         const isRoomCovered = (roomCode, reportedRoomStrings) => {
             const cleanCode = String(roomCode || '').trim().toUpperCase().replace(/\./g, '');
+            const normCode = cleanCode.replace(/^HTA20/, 'A20').replace(/[_-]/g, '');
             for (const rep of reportedRoomStrings) {
                 if (!rep) continue;
                 const cleanRep = String(rep).trim().toUpperCase().replace(/\./g, '');
-                if (cleanCode === cleanRep) return true;
+                const normRep = cleanRep.replace(/^HTA20/, 'A20').replace(/[_-]/g, '');
+                if (cleanCode === cleanRep || normCode === normRep) return true;
                 const parts = cleanRep.split(/[,;\-\/]+/).map(s => s.trim()).filter(Boolean);
-                if (parts.includes(cleanCode)) return true;
+                if (parts.includes(cleanCode) || parts.some(p => p.replace(/[_-]/g, '') === normCode)) return true;
                 const matchLetter = cleanCode.match(/^([A-Z]+)(\d+)$/);
                 if (matchLetter) {
                     const prefix = matchLetter[1];
