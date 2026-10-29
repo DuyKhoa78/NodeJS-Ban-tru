@@ -764,6 +764,9 @@ router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), as
     const offset = (page - 1) * limit;
     const { rows, count } = await GiaoVien.findAndCountAll({
       order: [['ho_ten', 'ASC']],
+      include: [
+        { model: StaffUser, as: 'user_account', attributes: ['id', 'username', 'role', 'is_active'] }
+      ],
       limit: parseInt(limit),
       offset: parseInt(offset),
     });
@@ -803,7 +806,15 @@ router.get('/api/giaovien/', loginRequired, roleRequired('admin', 'quan_ly'), as
       if (!seenCa.has(key)) { seenCa.add(key); caMap[c.ma_gv_id] = (caMap[c.ma_gv_id] || 0) + 1; }
     });
 
-    const data = rows.map(gv => ({ ...gv.toJSON(), ca_thang: caMap[gv.id] || 0 }));
+    const data = rows.map(gv => {
+      const gvJson = gv.toJSON();
+      return {
+        ...gvJson,
+        ca_thang: caMap[gv.id] || 0,
+        has_account: Boolean(gvJson.user_account && gvJson.user_account.is_active),
+        account_username: gvJson.user_account?.username || null
+      };
+    });
     return res.json({ ok: true, giaovien: data, total: count, page: parseInt(page), pages: Math.ceil(count / limit) });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

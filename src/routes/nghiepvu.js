@@ -41,13 +41,59 @@ function getLastDayYMD(year, month) {
     return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 }
 
-/** Điều kiện lọc ca trực mà giáo viên gvId thực tế đang chịu trách nhiệm (bao gồm trực thay, loại trừ ca đã có người khác trực thay) */
-function getTeacherActiveDutyCondition(gvId) {
+/** Tìm thông tin GV { gvId, gvName } cho tài khoản (dành cho Giáo viên hoặc Học vụ) */
+async function resolveTeacherInfoForUser(user) {
+    if (!user) return { gvId: null, gvName: null };
+    let gvId = user.giao_vien_id || null;
+    let gvName = (user.fullname || user.username || '').trim() || null;
+    if (gvId) {
+        const gvObj = await GiaoVien.findByPk(gvId, { attributes: ['id', 'ho_ten'] });
+        if (gvObj) {
+            gvName = gvObj.ho_ten;
+            return { gvId, gvName };
+        }
+    }
+    const cleanName = (user.fullname || user.username || '').trim();
+    if (cleanName) {
+        const gvObj = await GiaoVien.findOne({
+            where: {
+                [Op.or]: [
+                    { ho_ten: { [Op.iLike]: cleanName } },
+                    sequelize.where(sequelize.fn('LOWER', sequelize.col('ho_ten')), cleanName.toLowerCase())
+                ]
+            },
+            attributes: ['id', 'ho_ten']
+        });
+        if (gvObj) {
+            gvId = gvObj.id;
+            gvName = gvObj.ho_ten;
+        }
+    }
+    return { gvId, gvName };
+}
+
+/** Tìm gvId cho tài khoản (dành cho Giáo viên hoặc Học vụ) */
+async function resolveGvIdForUser(user) {
+    const info = await resolveTeacherInfoForUser(user);
+    return info.gvId || null;
+}
+
+/** Điều kiện lọc ca trực mà giáo viên gvId / gvName thực tế đang chịu trách nhiệm (bao gồm trực thay, loại trừ ca đã có người khác trực thay) */
+function getTeacherActiveDutyCondition(gvId, gvName = null) {
+    const subConditions = [];
+    if (gvId) {
+        subConditions.push({ ma_gv_truc_thay_id: gvId });
+    }
+    if (gvName && typeof gvName === 'string' && gvName.trim()) {
+        const cleanName = gvName.trim();
+        subConditions.push({ ten_gv_truc_thay: { [Op.iLike]: cleanName } });
+    }
+
     return {
         [Op.or]: [
-            { ma_gv_truc_thay_id: gvId },
+            ...(subConditions.length > 0 ? subConditions : (gvId ? [{ ma_gv_truc_thay_id: gvId }] : [])),
             {
-                ma_gv_id: gvId,
+                ...(gvId ? { ma_gv_id: gvId } : {}),
                 ma_gv_truc_thay_id: null,
                 [Op.or]: [
                     { ten_gv_truc_thay: null },
@@ -56,24 +102,6 @@ function getTeacherActiveDutyCondition(gvId) {
             }
         ]
     };
-}
-
-/** Tìm gvId cho tài khoản (dành cho Giáo viên hoặc Học vụ) */
-async function resolveGvIdForUser(user) {
-    if (!user) return null;
-    let gvId = user.giao_vien_id;
-    if (!gvId) {
-        const gvObj = await GiaoVien.findOne({
-            where: {
-                [Op.or]: [
-                    { ho_ten: user.username },
-                    { ho_ten: user.fullname }
-                ]
-            }
-        });
-        if (gvObj) gvId = gvObj.id;
-    }
-    return gvId || null;
 }
 
 /** ─── WEEK CONFIG ─── */
@@ -714,13 +742,13 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
         let assignedRooms = null;
         let myAssignments = null;
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
-            const gvId = await resolveGvIdForUser(req.user);
-            if (gvId) {
+            const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
+            if (gvId || gvName) {
                 myAssignments = await PhanCongTrucGV.findAll({
                     where: {
                         ngay: ngayFilter,
                         loai_truc: loaiTrucQuery,
-                        ...getTeacherActiveDutyCondition(gvId)
+                        ...getTeacherActiveDutyCondition(gvId, gvName)
                     }
                 });
                 assignedRooms = myAssignments.map(a => a.ma_phong_id);
@@ -877,12 +905,12 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
             const vn = getVietnamTime();
 
             if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
-                const gvId = await resolveGvIdForUser(req.user);
+                const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
                 const pcList = await PhanCongTrucGV.findAll({
                     where: {
                         ngay: reqNgay,
                         loai_truc: loaiPhongNum,
-                        ...getTeacherActiveDutyCondition(gvId)
+                        ...getTeacherActiveDutyCondition(gvId, gvName)
                     }
                 });
                 if (pcList.length === 0) {
@@ -1252,9 +1280,9 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
         // Auto rescue nếu đã quá giờ cắt
         await checkAndAutoRescueRooms(targetNgay);
 
-        let gvId = await resolveGvIdForUser(req.user);
+        const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
 
-        if (!gvId && (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu')) {
+        if (!gvId && !gvName && (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu')) {
             return res.status(404).json({ ok: false, error: 'Không tìm thấy hồ sơ giáo viên/nhân sự liên kết với tài khoản này' });
         }
 
@@ -1262,7 +1290,7 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
         let whereClause = { ngay: targetNgay };
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
             whereClause[Op.and] = [
-                getTeacherActiveDutyCondition(gvId)
+                getTeacherActiveDutyCondition(gvId, gvName)
             ];
         }
 
@@ -1270,7 +1298,8 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             where: whereClause,
             include: [
                 { association: 'phong', attributes: ['ma_phong', 'loai_phong', 'gioi_tinh'] },
-                { association: 'giao_vien', attributes: ['id', 'ho_ten'] }
+                { association: 'giao_vien', attributes: ['id', 'ho_ten'] },
+                { association: 'giao_vien_truc_thay', attributes: ['id', 'ho_ten'] }
             ],
             order: [['loai_truc', 'ASC']]
         });
@@ -1432,7 +1461,8 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
 
             // Kiểm tra trạng thái báo cáo ca trực của phòng (hỗ trợ cả báo cáo đơn phòng và báo cáo gộp liên phòng)
             // Riêng phòng SANH có nhiều GV cùng điểm danh nên đối chiếu theo đúng họ tên GV trực để không bị lẫn báo cáo của GV khác
-            const gvNameForReport = pc.giao_vien?.ho_ten || req.user.fullname || req.user.username || '';
+            const activeGvName = pc.giao_vien_truc_thay?.ho_ten || pc.ten_gv_truc_thay || pc.giao_vien?.ho_ten || req.user.fullname || req.user.username || '';
+            const gvNameForReport = activeGvName;
             const bcWhere = {
                 ngay: targetNgay,
                 ca_truc: loaiTruc,
@@ -1498,6 +1528,8 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
                 loai_truc: pc.loai_truc,
                 nhiem_vu: pc.nhiem_vu, // 0=Điểm danh, 1=Giám sát
                 ma_phong_id: pc.ma_phong_id,
+                is_truc_thay: Boolean(pc.ma_gv_truc_thay_id || (pc.ten_gv_truc_thay && pc.ten_gv_truc_thay.trim())),
+                thay_cho: (pc.ma_gv_truc_thay_id || pc.ten_gv_truc_thay) ? pc.giao_vien?.ho_ten : null,
                 phong: pc.phong,
                 total_students: totalStudents,
                 draft_count: draftCount,
@@ -1573,13 +1605,13 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
 
         // Kiểm tra phân công nếu là giáo viên hoặc học vụ
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
-            const gvId = await resolveGvIdForUser(req.user);
+            const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
             const pc = await PhanCongTrucGV.findOne({
                 where: {
                     ngay,
                     loai_truc: loaiTrucNum,
                     ma_phong_id: dbPhongId,
-                    ...getTeacherActiveDutyCondition(gvId)
+                    ...getTeacherActiveDutyCondition(gvId, gvName)
                 }
             });
             if (!pc) {
@@ -1674,13 +1706,13 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
 
         // Kiểm tra phân công nếu là giáo viên hoặc học vụ (không cho phép xem bản nháp phòng người khác)
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
-            const gvId = await resolveGvIdForUser(req.user);
+            const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
             const pc = await PhanCongTrucGV.findOne({
                 where: {
                     ngay,
                     loai_truc: loaiTrucNum,
                     ma_phong_id: dbPhongId,
-                    ...getTeacherActiveDutyCondition(gvId)
+                    ...getTeacherActiveDutyCondition(gvId, gvName)
                 }
             });
             if (!pc) {
@@ -1771,13 +1803,13 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
 
         // Nếu là giáo viên hoặc học vụ, kiểm tra phân công nhiệm vụ
         if (req.user.role === 'giao_vien' || req.user.role === 'hoc_vu') {
-            const gvId = await resolveGvIdForUser(req.user);
+            const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
             const pc = await PhanCongTrucGV.findOne({
                 where: {
                     ngay,
                     loai_truc: loaiTrucNum,
                     ma_phong_id: dbPhongId,
-                    ...getTeacherActiveDutyCondition(gvId)
+                    ...getTeacherActiveDutyCondition(gvId, gvName)
                 }
             });
             if (!pc) {
@@ -2329,7 +2361,31 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
     const t = await sequelize.transaction();
     try {
         const { id, ma_gv_id, ma_phong_id, ngay, loai_truc, xac_nhan_truc, ma_gv_truc_thay_id, ten_gv_truc_thay, nhiem_vu } = req.body;
-        const isNgoai = Boolean(ten_gv_truc_thay && String(ten_gv_truc_thay).trim());
+        
+        let finalGvThayId = ma_gv_truc_thay_id ? parseInt(ma_gv_truc_thay_id) : null;
+        let finalTenThay = ten_gv_truc_thay && String(ten_gv_truc_thay).trim() ? String(ten_gv_truc_thay).trim() : null;
+
+        // Nếu người dùng nhập tên trực thay bằng chữ (hoặc chọn ngoài danh sách):
+        // Tự động kiểm tra xem tên này có khớp với Giáo viên chính thức trong trường không
+        if (finalTenThay) {
+            const cleanTen = finalTenThay.trim();
+            const matchedOfficialGv = await GiaoVien.findOne({
+                where: {
+                    [Op.or]: [
+                        { ho_ten: { [Op.iLike]: cleanTen } },
+                        sequelize.where(sequelize.fn('LOWER', sequelize.col('ho_ten')), cleanTen.toLowerCase())
+                    ]
+                },
+                transaction: t
+            });
+            if (matchedOfficialGv) {
+                // Tự động liên kết mã GV chính thức để GV này đăng nhập và nhận trọn vẹn danh sách HS của phòng
+                finalGvThayId = matchedOfficialGv.id;
+                finalTenThay = null;
+            }
+        }
+
+        const isNgoai = Boolean(finalTenThay && !finalGvThayId);
         const phong = await Phong.findByPk(ma_phong_id, { transaction: t });
         if (!phong || phong.loai_phong !== parseInt(loai_truc)) {
             await t.rollback();
@@ -2363,10 +2419,10 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
 
         // 1. KIỂM TRA GIỚI TÍNH (Cho phòng ngủ) - Chỉ kiểm tra nếu là GV trong trường
         if (!isNgoai) {
-            const targetGvId = ma_gv_truc_thay_id || ma_gv_id;
+            const targetGvId = finalGvThayId || ma_gv_id;
             const targetGv = targetGvId === ma_gv_id ? gv : await GiaoVien.findByPk(targetGvId, { transaction: t });
 
-            if (phong.loai_phong === 1 && phong.gioi_tinh !== null && !ma_gv_truc_thay_id) {
+            if (phong.loai_phong === 1 && phong.gioi_tinh !== null && !finalGvThayId) {
                 if (targetGv.gioi_tinh !== phong.gioi_tinh) {
                     await t.rollback();
                     return res.status(400).json({ ok: false, error: `Phòng ngủ ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} chỉ cho phép giáo viên ${phong.gioi_tinh === 0 ? 'Nam' : 'Nữ'} trực.` });
@@ -2398,12 +2454,12 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
         const assignedNV = nhiem_vu !== undefined && nhiem_vu !== null ? parseInt(nhiem_vu) : (gv.nhiem_vu || 0);
 
         // RÀNG BUỘC TRỰC THAY
-        if (ma_gv_truc_thay_id && !isNgoai) {
-            if (parseInt(ma_gv_truc_thay_id) === parseInt(ma_gv_id)) {
+        if (finalGvThayId && !isNgoai) {
+            if (parseInt(finalGvThayId) === parseInt(ma_gv_id)) {
                 await t.rollback();
                 return res.status(400).json({ ok: false, error: 'Giáo viên không thể trực thay cho chính mình' });
             }
-        } else if (!isNgoai && !ma_gv_truc_thay_id) {
+        } else if (!isNgoai && !finalGvThayId) {
             // CHỈ KIỂM TRA GIỚI HẠN KHI THÊM MỚI (KHÔNG PHẢI TRỰC THAY)
             const slToiDa = assignedNV === 0 ? (phong.sl_diem_danh || 1) : (phong.sl_ho_tro || 1);
             const hienTai = await PhanCongTrucGV.count({
@@ -2425,8 +2481,8 @@ router.post('/api/lichtruc/save/', loginRequired, roleRequired('admin', 'quan_ly
             loai_truc: parseInt(loai_truc),
             nhiem_vu: assignedNV,
             xac_nhan_truc: xac_nhan_truc !== false,
-            ma_gv_truc_thay_id: isNgoai ? null : (ma_gv_truc_thay_id || null),
-            ten_gv_truc_thay: isNgoai ? String(ten_gv_truc_thay).trim() : null,
+            ma_gv_truc_thay_id: finalGvThayId,
+            ten_gv_truc_thay: finalTenThay,
             ngay_cap_nhat: new Date(),
             nguoi_cap_nhat_id: req.session?.user?.id || null,
         };
@@ -6251,19 +6307,12 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
 
         // 3. Kiểm tra xem giáo viên có nhiệm vụ Giám Sát (nhiem_vu = 1) hay không
         let isGiamSat = false;
-        let gvId = req.user.giao_vien_id;
-        if (!gvId) {
-            const gvObj = await GiaoVien.findOne({ where: { ho_ten: req.user.username } });
-            if (gvObj) gvId = gvObj.id;
-        }
-        if (gvId) {
+        const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
+        if (gvId || gvName) {
             const pcGiamSat = await PhanCongTrucGV.findOne({
                 where: {
                     ngay: targetNgay,
-                    [Op.or]: [
-                        { ma_gv_id: gvId },
-                        { ma_gv_truc_thay_id: gvId }
-                    ],
+                    ...getTeacherActiveDutyCondition(gvId, gvName),
                     nhiem_vu: 1
                 }
             });
