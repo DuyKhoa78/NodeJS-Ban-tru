@@ -543,9 +543,19 @@ function getHTAGroupNumberBE(cls) {
     return 1;
 }
 
-function parseSanhSubRoom(roomCode) {
+function parseSanhSubRoom(roomCode, loaiTruc = null) {
     const raw = String(roomCode || '').trim().toUpperCase();
-    const m = raw.match(/^(?:SANH|HT\.?A)[_-]?([123])$/i);
+    // Phòng tách SANH_1, SANH_2, SANH_3 CHỈ áp dụng duy nhất cho phòng ăn SANH (ca ăn, loai_truc === 0).
+    // Các phòng ca ngủ như HTA_1, HTA_2, HTA_3, HTA_4, HTA_5 là các phòng ngủ độc lập tại Hội trường A, tuyệt đối KHÔNG quy về SANH!
+    if (loaiTruc === 1 || loaiTruc === '1' || loaiTruc === 'ngu') {
+        return {
+            isSubRoom: false,
+            baseRoom: raw,
+            groupNum: null,
+            subCode: raw,
+        };
+    }
+    const m = raw.match(/^SANH[_-]?([123])$/i);
     if (m) {
         const groupNum = parseInt(m[1], 10);
         return {
@@ -862,7 +872,7 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 }
                 const assignedRoomsSet = new Set(pcList.map(pc => pc.ma_phong_id));
                 for (const r of records) {
-                    const basePhong = r.ma_phong ? parseSanhSubRoom(r.ma_phong).baseRoom : null;
+                    const basePhong = r.ma_phong ? parseSanhSubRoom(r.ma_phong, loaiPhongNum).baseRoom : null;
                     if (basePhong && !assignedRoomsSet.has(basePhong)) {
                         return res.status(403).json({
                             ok: false,
@@ -973,7 +983,7 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
             }
 
             const data = validRecords.map(r => {
-                const basePhong = r.ma_phong ? parseSanhSubRoom(r.ma_phong).baseRoom : null;
+                const basePhong = r.ma_phong ? parseSanhSubRoom(r.ma_phong, loaiPhongNum).baseRoom : null;
                 return {
                     ma_hs_id: r.ma_hs,
                     ngay: r.ngay,
@@ -1537,7 +1547,7 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
         }
 
         const loaiTrucNum = Number(loai_truc);
-        const subInfo = parseSanhSubRoom(ma_phong_id);
+        const subInfo = parseSanhSubRoom(ma_phong_id, loaiTrucNum);
         const dbPhongId = subInfo.baseRoom;
 
         // Kiểm tra phân công nếu là giáo viên hoặc học vụ
@@ -1638,7 +1648,7 @@ router.get('/api/diemdanh/draft/', loginRequired, roleRequired('admin', 'hoc_vu'
         }
 
         const loaiTrucNum = Number(loai_truc);
-        const subInfo = parseSanhSubRoom(ma_phong_id);
+        const subInfo = parseSanhSubRoom(ma_phong_id, loaiTrucNum);
         const dbPhongId = subInfo.baseRoom;
 
         // Kiểm tra phân công nếu là giáo viên hoặc học vụ (không cho phép xem bản nháp phòng người khác)
@@ -1726,7 +1736,7 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
         }
 
         const loaiTrucNum = Number(loai_truc);
-        const subInfo = parseSanhSubRoom(ma_phong_id);
+        const subInfo = parseSanhSubRoom(ma_phong_id, loaiTrucNum);
         const dbPhongId = subInfo.baseRoom;
         const vn = getVietnamTime();
 
@@ -1967,7 +1977,7 @@ router.post('/api/diemdanh/mo-chot/', loginRequired, roleRequired('admin', 'hoc_
         }
 
         const loaiTrucNum = Number(loai_truc);
-        const subInfo = ma_phong_id ? parseSanhSubRoom(ma_phong_id) : null;
+        const subInfo = ma_phong_id ? parseSanhSubRoom(ma_phong_id, loaiTrucNum) : null;
         const dbPhongId = subInfo ? subInfo.baseRoom : null;
         const whereClause = { ngay, loai_truc: loaiTrucNum };
         if (dbPhongId) whereClause.ma_phong_id = dbPhongId;
@@ -6010,8 +6020,8 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const roomCodes = rawPhong
             ? rawPhong.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
             : [];
-        const singleSubInfo = roomCodes.length <= 1 ? parseSanhSubRoom(roomCodes[0] || rawPhong) : null;
-        const dbRoomCodes = [...new Set(roomCodes.map(rc => parseSanhSubRoom(rc).baseRoom))];
+        const singleSubInfo = roomCodes.length <= 1 ? parseSanhSubRoom(roomCodes[0] || rawPhong, loaiTruc) : null;
+        const dbRoomCodes = [...new Set(roomCodes.map(rc => parseSanhSubRoom(rc, loaiTruc).baseRoom))];
 
         // 1. Kiểm tra xem giáo viên này (hoặc phòng này) đã có báo cáo trong ngày chưa
         let existingReport = null;
@@ -6284,7 +6294,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const chuaChotRooms = [];
         if (loaiTruc !== 2) {
             for (const rCode of roomCodes) {
-                const rSub = parseSanhSubRoom(rCode);
+                const rSub = parseSanhSubRoom(rCode, loaiTruc);
                 const ddp = await DiemDanhPhong.findOne({
                     where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rSub.baseRoom }
                 });
@@ -6466,7 +6476,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
                 const chuaChotRooms = [];
 
                 for (const rCode of roomCodes) {
-                    const rSub = parseSanhSubRoom(rCode);
+                    const rSub = parseSanhSubRoom(rCode, loaiTruc);
                     const ddp = await DiemDanhPhong.findOne({
                         where: { ngay: targetNgay, loai_truc: loaiTruc, ma_phong_id: rSub.baseRoom }
                     });
@@ -6496,7 +6506,7 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
         }
 
         // Chuẩn hóa mã phòng lưu xuống CSDL: SANH_1, SANH_2, SANH_3 vẫn lưu là 'SANH' để không ảnh hưởng CSDL
-        const subPhongSave = parseSanhSubRoom(maPhongChuan);
+        const subPhongSave = parseSanhSubRoom(maPhongChuan, loaiTruc);
         const dbMaPhongSave = subPhongSave.isSubRoom ? 'SANH' : maPhongChuan;
 
         let record = await BaoCaoTruc.findOne({
