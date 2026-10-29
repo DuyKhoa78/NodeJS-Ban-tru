@@ -2386,11 +2386,26 @@ router.get('/api/lichtruc/week-public/', loginRequired, async (req, res) => {
         }
         const phong_list = [...activePhongs.map(p => p.toJSON()), ...extraPhongs.map(p => p.toJSON())];
 
+        let finalGvList = [...(gv_list || appCache.get('gv_active_list') || [])];
+        const activeGvIds = new Set(finalGvList.map(g => g.id));
+        const recordGvIds = new Set();
+        records.forEach(r => {
+            if (r.ma_gv_id && !activeGvIds.has(r.ma_gv_id)) recordGvIds.add(r.ma_gv_id);
+            if (r.ma_gv_truc_thay_id && !activeGvIds.has(r.ma_gv_truc_thay_id)) recordGvIds.add(r.ma_gv_truc_thay_id);
+        });
+        if (recordGvIds.size > 0) {
+            const extraGvs = await GiaoVien.findAll({
+                where: { id: [...recordGvIds] },
+                attributes: ['id', 'ho_ten', 'gioi_tinh', 'nhiem_vu', 'lich_ranh']
+            });
+            finalGvList = [...finalGvList, ...extraGvs.map(g => g.toJSON())];
+        }
+
         return res.json({
             ok: true,
             records,
             tuan,
-            gv_list: gv_list || appCache.get('gv_active_list') || [],
+            gv_list: finalGvList,
             phong_list,
             nam_hoc: cauhinh?.nam_hoc || appCache.get('cauhinh_hethong')?.nam_hoc || '2026-2027',
             nguoi_phu_trach: cauhinh?.nguoi_phu_trach || appCache.get('cauhinh_hethong')?.nguoi_phu_trach || 'Vũ Quốc Phong',
