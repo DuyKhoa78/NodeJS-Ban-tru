@@ -746,7 +746,7 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
         const curMinutes = vnNow.getUTCHours() * 60 + vnNow.getUTCMinutes();
         const todayVn = vnNow.toISOString().split('T')[0];
         const isCaAn = loaiTrucQuery === 0;
-        const minMinutes = isCaAn ? 675 : 700; // 11:15 hoặc 11:40
+        const minMinutes = isCaAn ? 675 : 695; // 11:15 hoặc 11:35
         const maxMinutes = isCaAn ? 705 : 765; // 11:45 hoặc 12:45
         let timeState = 'trong_gio';
         if (ngayFilter === todayVn) {
@@ -772,7 +772,7 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
             khung_gio_bao_cao: {
                 state: timeState,
                 is_het_gio: timeState === 'qua_gio',
-                gio_mo: isCaAn ? '11:15' : '11:40',
+                gio_mo: isCaAn ? '11:15' : '11:35',
                 gio_dong: isCaAn ? '11:45' : '12:45'
             }
         });
@@ -6254,7 +6254,7 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
 
         // 5. Kiểm tra điều kiện điểm danh xong & Khung giờ quy định
         // Báo cáo Ăn: 11h15 (675) đến 11h45 (705)
-        // Báo cáo Ngủ: 11h40 (700) đến 12h45 (765)
+        // Báo cáo Ngủ: 11h35 (695) đến 12h45 (765)
         const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
         const curMinutes = vnNow.getUTCHours() * 60 + vnNow.getUTCMinutes();
         const curHourStr = String(vnNow.getUTCHours()).padStart(2, '0') + ':' + String(vnNow.getUTCMinutes()).padStart(2, '0');
@@ -6262,9 +6262,9 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const isToday = targetNgay === todayVn;
 
         const isCaAn = loaiTruc === 0 || loaiTruc === 2;
-        const minMinutes = isCaAn ? 675 : 700; // 11:15 hoặc 11:40
+        const minMinutes = isCaAn ? 675 : 695; // 11:15 hoặc 11:35
         const maxMinutes = isCaAn ? 705 : 765; // 11:45 hoặc 12:45
-        const gioMoCua = isCaAn ? '11:15' : '11:40';
+        const gioMoCua = isCaAn ? '11:15' : '11:35';
         const gioDongCua = isCaAn ? '11:45' : '12:45';
 
         let timeState = 'trong_gio'; // 'chua_den' | 'trong_gio' | 'qua_gio'
@@ -6454,9 +6454,9 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
             }
 
             const isCaAn = loaiTruc === 0 || loaiTruc === 2;
-            const minMinutes = isCaAn ? 675 : 700; // 11h15 hoặc 11h40
+            const minMinutes = isCaAn ? 675 : 695; // 11h15 hoặc 11h35
             const maxMinutes = isCaAn ? 705 : 765; // 11h45 hoặc 12h45
-            const timeRangeText = isCaAn ? '11h15 đến 11h45' : '11h40 đến 12h45';
+            const timeRangeText = isCaAn ? '11h15 đến 11h45' : '11h35 đến 12h45';
             const timeEndText = isCaAn ? '11h45' : '12h45';
 
             if (curMinutes < minMinutes) {
