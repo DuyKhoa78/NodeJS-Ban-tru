@@ -369,13 +369,13 @@ async function checkAndAutoRescueRooms(targetNgay) {
 
         // Xác định ca nào đã quá giờ:
         // Ca Ăn kết thúc lúc 11h30 (690 phút)
-        // Ca Ngủ kết thúc lúc 12h05 (725 phút)
+        // Ca Ngủ kết thúc lúc 12h00 (720 phút)
         const eligibleLoais = [];
         if (isPastDate) {
             eligibleLoais.push(0, 1);
         } else if (isToday) {
             if (vn.totalMins >= 690) eligibleLoais.push(0);
-            if (vn.totalMins >= 725) eligibleLoais.push(1);
+            if (vn.totalMins >= 720) eligibleLoais.push(1);
         }
 
         if (eligibleLoais.length === 0) return;
@@ -841,9 +841,9 @@ router.get('/api/diemdanh/', loginRequired, roleRequired('admin', 'hoc_vu', 'gia
         const baoCaoRecords = await BaoCaoTruc.findAll({
             where: {
                 ngay: ngayFilter,
-                ca_truc: loaiTrucQuery
+                ca_truc: loaiTrucQuery === 0 ? { [Op.in]: [0, 2] } : loaiTrucQuery
             },
-            attributes: ['id', 'ma_phong', 'ho_ten_gv', 'si_so', 'created_at']
+            attributes: ['id', 'ma_phong', 'ho_ten_gv', 'si_so', 'ca_truc', 'created_at']
         });
 
         const vnNow = new Date(Date.now() + 7 * 3600 * 1000);
@@ -986,20 +986,20 @@ router.post('/api/diemdanh/save/', loginRequired, roleRequired('admin', 'hoc_vu'
                 }
 
                 if (req.user.role === 'giao_vien') {
-                    // Chỉ mở vào đúng ngày trực và đúng khung giờ: Ăn (10h55 – 11h30), Ngủ (11h30 – 12h05)
+                    // Chỉ mở vào đúng ngày trực và đúng khung giờ: Ăn (10h55 – 11h30), Ngủ (11h20 – 12h00)
                     if (reqNgay !== vn.todayStr) {
                         return res.status(403).json({
                             ok: false,
                             error: `Theo quy định, hệ thống chỉ mở điểm danh vào đúng ngày trực (${reqNgay}) trong khung giờ ca ${loai === 'an' ? 'ăn' : 'ngủ'}.`
                         });
                     }
-                    const startMins = loai === 'an' ? 655 : 690;
-                    const endMins = loai === 'an' ? 690 : 725;
-                    const timeLabel = loai === 'an' ? '10h55 – 11h30' : '11h30 – 12h05';
+                    const startMins = loai === 'an' ? 655 : 680;
+                    const endMins = loai === 'an' ? 690 : 720;
+                    const timeLabel = loai === 'an' ? '10h55 – 11h30' : '11h20 – 12h00';
                     if (vn.totalMins < startMins || vn.totalMins >= endMins) {
                         return res.status(403).json({
                             ok: false,
-                            error: `Khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} là từ ${timeLabel} (khóa lúc ${loai === 'an' ? '11h30' : '12h05'}). Hiện tại hệ thống đang khóa.`
+                            error: `Khung giờ điểm danh ca ${loai === 'an' ? 'ăn' : 'ngủ'} là từ ${timeLabel} (khóa lúc ${loai === 'an' ? '11h30' : '12h00'}). Hiện tại hệ thống đang khóa.`
                         });
                     }
                 } else if (req.user.role === 'hoc_vu') {
@@ -1138,8 +1138,8 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
         }
 
         while (curr <= end) {
-            const dow = curr.getDay(); // 0 = CN, 6 = T7
-            if (dow !== 0 && dow !== 6) {
+            const dow = curr.getDay(); // 0 = CN, 1..4 = T2..T5, 5 = T6, 6 = T7
+            if (dow >= 1 && dow <= 4) {
                 const yyyy = curr.getFullYear();
                 const mm = String(curr.getMonth() + 1).padStart(2, '0');
                 const dd = String(curr.getDate()).padStart(2, '0');
@@ -1149,7 +1149,7 @@ router.post('/api/diemdanh/bao-phep-truoc/', loginRequired, roleRequired('admin'
         }
 
         if (dates.length === 0) {
-            return res.status(400).json({ ok: false, error: 'Khoảng thời gian đã chọn rơi vào cuối tuần, không có ngày học bán trú' });
+            return res.status(400).json({ ok: false, error: 'Khoảng thời gian đã chọn không có ngày học bán trú (Thứ 2 – Thứ 5)' });
         }
 
         const t = await sequelize.transaction();
@@ -1246,20 +1246,25 @@ router.post('/api/diemdanh/huy-phep/', loginRequired, roleRequired('admin'), asy
             return res.json({ ok: true, message: 'Không tìm thấy dữ liệu điểm danh cần hủy' });
         }
 
+        // Kiểm tra xem ngày này đã được điểm danh thực tế chưa
+        const checkedRoomCount = await DiemDanhPhong.count({ where: { ngay } });
+        const isDayChecked = checkedRoomCount > 0;
+        const revertValue = isDayChecked ? 0 : null;
+
         const updates = {};
-        if (loaiCa === 'an' || loaiCa === 'ca_ngay') {
-            updates.diem_danh_an = null;
+        if ((loaiCa === 'an' || loaiCa === 'ca_ngay') && rec.diem_danh_an === 2) {
+            updates.diem_danh_an = revertValue;
         }
-        if (loaiCa === 'ngu' || loaiCa === 'ca_ngay') {
-            updates.diem_danh_ngu = null;
+        if ((loaiCa === 'ngu' || loaiCa === 'ca_ngay') && rec.diem_danh_ngu === 2) {
+            updates.diem_danh_ngu = revertValue;
         }
 
         const finalAn = updates.diem_danh_an !== undefined ? updates.diem_danh_an : rec.diem_danh_an;
         const finalNgu = updates.diem_danh_ngu !== undefined ? updates.diem_danh_ngu : rec.diem_danh_ngu;
 
-        if (finalAn === null && finalNgu === null) {
+        if (!isDayChecked && finalAn === null && finalNgu === null) {
             await rec.destroy();
-        } else {
+        } else if (Object.keys(updates).length > 0) {
             await rec.update(updates);
         }
 
@@ -1486,11 +1491,11 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
 
             // Khung giờ điểm danh:
             // Ăn: 10:55 (655) -> 11:30 (690)
-            // Ngủ: 11:30 (690) -> 12:05 (725)
-            const startMins = loaiTruc === 0 ? 655 : 690;
-            const endMins = loaiTruc === 0 ? 690 : 725;
-            const startStr = loaiTruc === 0 ? '10:55' : '11:30';
-            const endStr = loaiTruc === 0 ? '11:30' : '12:05';
+            // Ngủ: 11:20 (680) -> 12:00 (720)
+            const startMins = loaiTruc === 0 ? 655 : 680;
+            const endMins = loaiTruc === 0 ? 690 : 720;
+            const startStr = loaiTruc === 0 ? '10:55' : '11:20';
+            const endStr = loaiTruc === 0 ? '11:30' : '12:00';
 
             let timeState = 'sap_den'; // 'sap_den' | 'dang_dien_ra' | 'da_qua_gio'
             if (targetNgay === vn.todayStr) {
@@ -1519,15 +1524,16 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             // Riêng phòng SANH có nhiều GV cùng điểm danh nên đối chiếu theo đúng họ tên GV trực để không bị lẫn báo cáo của GV khác
             const activeGvName = pc.giao_vien_truc_thay?.ho_ten || pc.ten_gv_truc_thay || pc.giao_vien?.ho_ten || req.user.fullname || req.user.username || '';
             const gvNameForReport = activeGvName;
+            const isHoTroAn = loaiTruc === 0 && pc.nhiem_vu !== 0;
             const bcWhere = {
                 ngay: targetNgay,
-                ca_truc: loaiTruc,
+                ca_truc: isHoTroAn ? { [Op.in]: [0, 2] } : loaiTruc,
                 [Op.or]: [
                     { ma_phong: maPhong },
                     { ma_phong: { [Op.like]: `%${maPhong}%` } }
                 ]
             };
-            if (maPhong === 'SANH' && loaiTruc === 0 && gvNameForReport) {
+            if ((maPhong === 'SANH' || isHoTroAn) && loaiTruc === 0 && gvNameForReport) {
                 bcWhere.ho_ten_gv = gvNameForReport;
             }
             const bcRecord = await BaoCaoTruc.findOne({
@@ -1582,7 +1588,7 @@ router.get('/api/giao-vien/ca-truc-hom-nay', loginRequired, async (req, res) => 
             let reportLockReason = '';
 
             if (!isAdmin) {
-                if (!isChot && loaiTruc !== 2) {
+                if (!isChot && loaiTruc !== 2 && !isHoTroAn) {
                     canReport = false;
                     reportLockReason = `Cần chốt điểm danh phòng ${maPhong} trước`;
                 } else if (bcTimeState === 'sap_den') {
@@ -1697,9 +1703,9 @@ router.post('/api/diemdanh/draft-sync/', loginRequired, roleRequired('admin', 'h
                 if (ngay !== vn.todayStr) {
                     return res.status(403).json({ ok: false, error: `Hệ thống chỉ mở vào đúng ngày trực (${ngay}) trong khung giờ quy định.` });
                 }
-                const startMins = loaiTrucNum === 0 ? 655 : 690;
-                const endMins = loaiTrucNum === 0 ? 690 : 725;
-                const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
+                const startMins = loaiTrucNum === 0 ? 655 : 680;
+                const endMins = loaiTrucNum === 0 ? 690 : 720;
+                const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h20 – 12h00';
                 if (vn.totalMins < startMins || vn.totalMins >= endMins) {
                     return res.status(403).json({ ok: false, error: `Khung giờ điểm danh ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
                 }
@@ -1895,9 +1901,9 @@ router.post('/api/diemdanh/chot-phong/', loginRequired, roleRequired('admin', 'h
                 if (ngay !== vn.todayStr) {
                     return res.status(403).json({ ok: false, error: `Theo quy định, hệ thống chỉ mở chốt sổ vào đúng ngày trực (${ngay}) trong khung giờ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'}.` });
                 }
-                const startMins = loaiTrucNum === 0 ? 655 : 690;
-                const endMins = loaiTrucNum === 0 ? 690 : 725;
-                const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h30 – 12h05';
+                const startMins = loaiTrucNum === 0 ? 655 : 680;
+                const endMins = loaiTrucNum === 0 ? 690 : 720;
+                const timeLabel = loaiTrucNum === 0 ? '10h55 – 11h30' : '11h20 – 12h00';
                 if (vn.totalMins < startMins || vn.totalMins >= endMins) {
                     return res.status(403).json({ ok: false, error: `Khung giờ chốt sổ ca ${loaiTrucNum === 0 ? 'ăn' : 'ngủ'} là từ ${timeLabel}. Hiện tại hệ thống đang khóa.` });
                 }
@@ -6249,10 +6255,44 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
         const singleSubInfo = roomCodes.length <= 1 ? parseSanhSubRoom(roomCodes[0] || rawPhong, loaiTruc) : null;
         const dbRoomCodes = [...new Set(roomCodes.map(rc => parseSanhSubRoom(rc, loaiTruc).baseRoom))];
 
+        // Kiểm tra xem giáo viên có nhiệm vụ Giám Sát (nhiem_vu = 1) hay không
+        let isGiamSat = false;
+        let isHoTroAnOnly = false;
+        const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
+        if (gvId || gvName) {
+            const pcGiamSatList = await PhanCongTrucGV.findAll({
+                where: {
+                    ngay: targetNgay,
+                    ...getTeacherActiveDutyCondition(gvId, gvName),
+                },
+                raw: true
+            });
+            if (pcGiamSatList.some(r => r.nhiem_vu === 1)) {
+                isGiamSat = true;
+            }
+            const pcAnList = pcGiamSatList.filter(r => r.loai_truc === 0);
+            if (pcAnList.length > 0 && pcAnList.every(r => r.nhiem_vu !== 0)) {
+                isHoTroAnOnly = true;
+            }
+        }
+        if (req.user.role === 'admin' || req.user.role === 'quan_ly') {
+            isGiamSat = true;
+        }
+        const isSupportAnReport = loaiTruc === 2 || (loaiTruc === 0 && isHoTroAnOnly);
+
         // 1. Kiểm tra xem giáo viên này (hoặc phòng này) đã có báo cáo trong ngày chưa
         let existingReport = null;
         if (rawPhong) {
-            if (roomCodes.length <= 1) {
+            if (isSupportAnReport) {
+                existingReport = await BaoCaoTruc.findOne({
+                    where: {
+                        ngay: targetNgay,
+                        ca_truc: { [Op.in]: [0, 2] },
+                        ho_ten_gv: hoTenGV,
+                    },
+                    order: [['id', 'DESC']]
+                });
+            } else if (roomCodes.length <= 1) {
                 const targetCode = (roomCodes[0] || rawPhong).toUpperCase();
                 if (singleSubInfo && singleSubInfo.baseRoom === 'SANH' && loaiTruc === 0) {
                     // Phòng SANH có 3 GV trực độc lập (SANH_1, SANH_2, SANH_3) -> chỉ lấy báo cáo của chính GV đang đăng nhập
@@ -6445,23 +6485,6 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             }
         }
 
-        // 3. Kiểm tra xem giáo viên có nhiệm vụ Giám Sát (nhiem_vu = 1) hay không
-        let isGiamSat = false;
-        const { gvId, gvName } = await resolveTeacherInfoForUser(req.user);
-        if (gvId || gvName) {
-            const pcGiamSat = await PhanCongTrucGV.findOne({
-                where: {
-                    ngay: targetNgay,
-                    ...getTeacherActiveDutyCondition(gvId, gvName),
-                    nhiem_vu: 1
-                }
-            });
-            if (pcGiamSat) isGiamSat = true;
-        }
-        if (req.user.role === 'admin' || req.user.role === 'quan_ly') {
-            isGiamSat = true;
-        }
-
         // 4. Lấy cấu hình link Google Form
         const heThong = await CauHinhHeThong.findByPk(1);
         const linkGoogleForm = heThong?.link_google_form || 'https://forms.gle/6B4GC5aG1KyEuQTaA';
@@ -6508,10 +6531,10 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             timeMessage = 'Chưa tới ngày báo cáo.';
         }
 
-        // Kiểm tra xem phòng này đã chốt điểm danh chưa (Chỉ khi GV chốt điểm danh mới được báo cáo)
+        // Kiểm tra xem phòng này đã chốt điểm danh chưa (Chỉ khi GV chốt điểm danh mới được báo cáo; GV Hỗ trợ ăn không cần đợi chốt)
         let daChotDiemDanh = true;
         const chuaChotRooms = [];
-        if (loaiTruc !== 2) {
+        if (loaiTruc !== 2 && !isSupportAnReport) {
             for (const rCode of roomCodes) {
                 const rSub = parseSanhSubRoom(rCode, loaiTruc);
                 const ddp = await DiemDanhPhong.findOne({
@@ -6565,9 +6588,10 @@ router.get('/api/baocaotruc/lay-thong-tin-tu-dong', loginRequired, async (req, r
             ok: true,
             ho_ten_gv: hoTenGV,
             ngay: targetNgay,
-            ca_truc: loaiTruc,
+            ca_truc: isSupportAnReport ? 2 : loaiTruc,
             ma_phong: rawPhong,
             is_giam_sat: isGiamSat,
+            is_ho_tro_an_only: isHoTroAnOnly,
             si_so: cleanSiSoHelper(existingReport?.si_so || siSoCalculated, rawPhong),
             so_hs_phep: finalPhep,
             so_hs_vang: existingReport?.so_hs_vang !== undefined ? existingReport.so_hs_vang : soVangCalculated,
@@ -6655,6 +6679,23 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
             });
         }
 
+        let isHoTroAnOnly = false;
+        const { gvId: postGvId, gvName: postGvName } = await resolveTeacherInfoForUser(req.user);
+        if (postGvId || postGvName) {
+            const pcAnList = await PhanCongTrucGV.findAll({
+                where: {
+                    ngay: targetNgay,
+                    loai_truc: 0,
+                    ...getTeacherActiveDutyCondition(postGvId, postGvName),
+                },
+                raw: true
+            });
+            if (pcAnList.length > 0 && pcAnList.every(r => r.nhiem_vu !== 0)) {
+                isHoTroAnOnly = true;
+            }
+        }
+        const isSupportAnReport = loaiTruc === 2 || (loaiTruc === 0 && isHoTroAnOnly);
+
         // KIỂM TRA QUY ĐỊNH THỜI GIAN & ĐIỀU KIỆN ĐIỂM DANH:
         // 1. Báo cáo ăn: từ 11h15 đến 12h00; Báo cáo ngủ: từ 11h45 đến 13h00.
         // 2. GV phải điểm danh xong mới được báo cáo. Sau mốc thời gian này không được báo cáo.
@@ -6689,8 +6730,8 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
                 });
             }
 
-            // Kiểm tra điều kiện: CHỈ KHI GV CHỐT ĐIỂM DANH MỚI ĐƯỢC BÁO CÁO (đối với Ca Ăn và Ca Ngủ)
-            if (loaiTruc !== 2) {
+            // Kiểm tra điều kiện: CHỈ KHI GV CHỐT ĐIỂM DANH MỚI ĐƯỢC BÁO CÁO (GV Hỗ trợ ăn không cần đợi chốt)
+            if (loaiTruc !== 2 && !isSupportAnReport) {
                 const roomCodes = String(maPhongChuan).split(/[,;\-\/]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
                 const chuaChotRooms = [];
 
@@ -6731,14 +6772,14 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
         let record = await BaoCaoTruc.findOne({
             where: {
                 ngay: targetNgay,
-                ca_truc: loaiTruc,
+                ca_truc: isSupportAnReport ? { [Op.in]: [0, 2] } : loaiTruc,
                 ma_phong: dbMaPhongSave,
                 ho_ten_gv: hoTenGV,
             }
         });
 
-        // Chỉ gộp bản ghi theo ma_phong nếu KHÔNG phải phòng SANH (vì SANH có 3 GV báo cáo riêng biệt)
-        if (!record && dbMaPhongSave !== 'SANH') {
+        // Chỉ gộp bản ghi theo ma_phong nếu KHÔNG phải phòng SANH và KHÔNG phải báo cáo Hỗ trợ/Giám sát
+        if (!record && dbMaPhongSave !== 'SANH' && !isSupportAnReport) {
             record = await BaoCaoTruc.findOne({
                 where: {
                     ngay: targetNgay,
@@ -6750,13 +6791,23 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
 
         const now = new Date();
 
+        const finalCaTruc = isSupportAnReport ? 2 : loaiTruc;
+
         if (record) {
+            record.ca_truc = finalCaTruc;
             record.ho_ten_gv = hoTenGV;
             record.ma_phong = dbMaPhongSave;
-            if (si_so !== undefined) record.si_so = si_so !== null ? cleanSiSoHelper(si_so, maPhongChuan) : null;
-            if (so_hs_phep !== undefined) record.so_hs_phep = Math.max(0, phepNum);
-            if (so_hs_vang !== undefined) record.so_hs_vang = Math.max(0, vangNum);
-            if (danh_sach_vang !== undefined) record.danh_sach_vang = danh_sach_vang !== null ? String(danh_sach_vang).trim() : null;
+            if (isSupportAnReport) {
+                record.si_so = null;
+                record.so_hs_phep = 0;
+                record.so_hs_vang = 0;
+                record.danh_sach_vang = null;
+            } else {
+                if (si_so !== undefined) record.si_so = si_so !== null ? cleanSiSoHelper(si_so, maPhongChuan) : null;
+                if (so_hs_phep !== undefined) record.so_hs_phep = Math.max(0, phepNum);
+                if (so_hs_vang !== undefined) record.so_hs_vang = Math.max(0, vangNum);
+                if (danh_sach_vang !== undefined) record.danh_sach_vang = danh_sach_vang !== null ? String(danh_sach_vang).trim() : null;
+            }
             if (tinh_hinh !== undefined) record.tinh_hinh = tinh_hinh !== null ? String(tinh_hinh).trim() : 'Tốt, ổn định';
             if (hs_vi_pham !== undefined) record.hs_vi_pham = hs_vi_pham !== null ? String(hs_vi_pham).trim() : null;
             if (ghi_chu !== undefined) record.ghi_chu = ghi_chu !== null ? String(ghi_chu).trim() : null;
@@ -6768,13 +6819,13 @@ router.post('/api/baocaotruc/gui-bao-cao', loginRequired, async (req, res) => {
         } else {
             record = await BaoCaoTruc.create({
                 ngay: targetNgay,
-                ca_truc: loaiTruc,
+                ca_truc: finalCaTruc,
                 ma_phong: dbMaPhongSave,
                 ho_ten_gv: hoTenGV,
-                si_so: si_so ? cleanSiSoHelper(si_so, maPhongChuan) : null,
-                so_hs_phep: Math.max(0, phepNum),
-                so_hs_vang: Math.max(0, vangNum),
-                danh_sach_vang: danh_sach_vang ? String(danh_sach_vang).trim() : null,
+                si_so: isSupportAnReport ? null : (si_so ? cleanSiSoHelper(si_so, maPhongChuan) : null),
+                so_hs_phep: isSupportAnReport ? 0 : Math.max(0, phepNum),
+                so_hs_vang: isSupportAnReport ? 0 : Math.max(0, vangNum),
+                danh_sach_vang: isSupportAnReport ? null : (danh_sach_vang ? String(danh_sach_vang).trim() : null),
                 tinh_hinh: tinh_hinh ? String(tinh_hinh).trim() : 'Tốt, ổn định',
                 hs_vi_pham: hs_vi_pham ? String(hs_vi_pham).trim() : null,
                 ghi_chu: ghi_chu ? String(ghi_chu).trim() : null,
