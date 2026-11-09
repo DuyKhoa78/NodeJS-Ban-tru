@@ -74,6 +74,26 @@ const CauHinhHeThong = sequelize.define('CauHinhHeThong', {
         defaultValue: 70000,
         comment: 'Phụ cấp Y tế (đồng/ca)',
     },
+    gio_bat_dau_an: {
+        type: DataTypes.STRING(10),
+        defaultValue: '10:55',
+        comment: 'Giờ mở điểm danh ca ăn (HH:MM)',
+    },
+    gio_ket_thuc_an: {
+        type: DataTypes.STRING(10),
+        defaultValue: '11:30',
+        comment: 'Giờ đóng điểm danh ca ăn (HH:MM)',
+    },
+    gio_bat_dau_ngu: {
+        type: DataTypes.STRING(10),
+        defaultValue: '11:20',
+        comment: 'Giờ mở điểm danh ca ngủ (HH:MM)',
+    },
+    gio_ket_thuc_ngu: {
+        type: DataTypes.STRING(10),
+        defaultValue: '12:00',
+        comment: 'Giờ đóng điểm danh ca ngủ (HH:MM)',
+    },
 }, {
     tableName: 'core_cauhinhhethong',
     timestamps: false,

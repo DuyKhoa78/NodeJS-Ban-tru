@@ -1500,6 +1500,10 @@ router.get('/api/public/system-status/', async (req, res) => {
       thoi_gian: heThong?.thoi_gian_bao_tri || 'Dự kiến hoàn tất trong 15-30 phút',
       ten_truong: heThong?.ten_truong || 'LÊ THỊ HỒNG GẤM',
       nam_hoc: heThong?.nam_hoc || '2026-2027',
+      gio_bat_dau_an: heThong?.gio_bat_dau_an || '10:55',
+      gio_ket_thuc_an: heThong?.gio_ket_thuc_an || '11:30',
+      gio_bat_dau_ngu: heThong?.gio_bat_dau_ngu || '11:20',
+      gio_ket_thuc_ngu: heThong?.gio_ket_thuc_ngu || '12:00',
     };
     systemStatusCache = data;
     systemStatusCacheTime = now;
@@ -1514,11 +1518,30 @@ router.get('/api/public/system-status/', async (req, res) => {
   }
 });
 
-/** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri } */
+function normalizeHHMM(val, fallback) {
+  if (!val || typeof val !== 'string') return fallback;
+  const m = val.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  const hh = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+  const mm = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function hhmmToMins(str) {
+  const [h, m] = String(str || '00:00').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** POST /api/hethong/save/ - Body: { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri, gio_bat_dau_an, gio_ket_thuc_an, gio_bat_dau_ngu, gio_ket_thuc_ngu } */
 router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'), async (req, res) => {
   try {
     systemStatusCache = null; // Xóa cache ngay khi cấu hình thay đổi
-    const { nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv, bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri, tien_an, phu_cap_truc_tbi, phu_cap_gs_ban_tru, phu_cap_gs_an, phu_cap_y_te } = req.body;
+    const {
+      nam_hoc, nguoi_phu_trach, ten_truong, ma_bao_mat_gv,
+      bao_tri, thong_bao_bao_tri, thoi_gian_bao_tri,
+      tien_an, phu_cap_truc_tbi, phu_cap_gs_ban_tru, phu_cap_gs_an, phu_cap_y_te,
+      gio_bat_dau_an, gio_ket_thuc_an, gio_bat_dau_ngu, gio_ket_thuc_ngu
+    } = req.body;
     const updateData = {
       id: 1,
       nam_hoc,
@@ -1533,16 +1556,40 @@ router.post('/api/hethong/save/', loginRequired, roleRequired('admin', 'quan_ly'
     if (phu_cap_y_te !== undefined) updateData.phu_cap_y_te = Math.max(0, parseInt(phu_cap_y_te) || 0);
     if (ma_bao_mat_gv !== undefined) updateData.ma_bao_mat_gv = String(ma_bao_mat_gv).trim().toUpperCase();
     
-    // Chỉ duy nhất Super Admin mới có quyền cấu hình chế độ bảo trì
+    // Chỉ duy nhất Super Admin mới có quyền cấu hình chế độ bảo trì và khung giờ điểm danh
     const isSuperAdmin = Boolean(req.user?.is_superuser || req.user?.role === 'super_admin');
     if (isSuperAdmin) {
       if (bao_tri !== undefined) updateData.bao_tri = Boolean(bao_tri);
       if (thong_bao_bao_tri !== undefined) updateData.thong_bao_bao_tri = String(thong_bao_bao_tri).trim();
       if (thoi_gian_bao_tri !== undefined) updateData.thoi_gian_bao_tri = String(thoi_gian_bao_tri).trim();
+
+      if (gio_bat_dau_an !== undefined || gio_ket_thuc_an !== undefined) {
+        const startAn = normalizeHHMM(gio_bat_dau_an, '10:55');
+        const endAn = normalizeHHMM(gio_ket_thuc_an, '11:30');
+        if (hhmmToMins(startAn) >= hhmmToMins(endAn)) {
+          return res.status(400).json({ ok: false, error: 'Giờ bắt đầu điểm danh Ca Ăn phải nhỏ hơn giờ kết thúc!' });
+        }
+        updateData.gio_bat_dau_an = startAn;
+        updateData.gio_ket_thuc_an = endAn;
+      }
+
+      if (gio_bat_dau_ngu !== undefined || gio_ket_thuc_ngu !== undefined) {
+        const startNgu = normalizeHHMM(gio_bat_dau_ngu, '11:20');
+        const endNgu = normalizeHHMM(gio_ket_thuc_ngu, '12:00');
+        if (hhmmToMins(startNgu) >= hhmmToMins(endNgu)) {
+          return res.status(400).json({ ok: false, error: 'Giờ bắt đầu điểm danh Ca Ngủ phải nhỏ hơn giờ kết thúc!' });
+        }
+        updateData.gio_bat_dau_ngu = startNgu;
+        updateData.gio_ket_thuc_ngu = endNgu;
+      }
     }
 
     await CauHinhHeThong.upsert(updateData);
-    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Tiền ăn=${updateData.tien_an !== undefined ? updateData.tien_an.toLocaleString('vi-VN') + 'đ' : 'Không đổi'}, Bảo trì=${updateData.bao_tri !== undefined ? (updateData.bao_tri ? 'BẬT' : 'TẮT') : 'Không đổi'}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
+    invalidateStaticCaches();
+    const gioLog = (updateData.gio_bat_dau_an || updateData.gio_bat_dau_ngu)
+      ? `, Giờ Ăn=${updateData.gio_bat_dau_an || '10:55'}-${updateData.gio_ket_thuc_an || '11:30'}, Giờ Ngủ=${updateData.gio_bat_dau_ngu || '11:20'}-${updateData.gio_ket_thuc_ngu || '12:00'}`
+      : '';
+    await recordAuditLog(req, 'THIET_LAP', `Cập nhật cấu hình hệ thống: Tiền ăn=${updateData.tien_an !== undefined ? updateData.tien_an.toLocaleString('vi-VN') + 'đ' : 'Không đổi'}, Bảo trì=${updateData.bao_tri !== undefined ? (updateData.bao_tri ? 'BẬT' : 'TẮT') : 'Không đổi'}${gioLog}, Năm học ${nam_hoc}, Người phụ trách "${nguoi_phu_trach}", Trường "${ten_truong}"`);
     return res.json({ ok: true, message: 'Lưu cấu hình hệ thống thành công' });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

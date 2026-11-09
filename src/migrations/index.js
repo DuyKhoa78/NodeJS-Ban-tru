@@ -433,6 +433,25 @@ const migrations = [
         console.warn('Migration 20261007_set_thien_thanh_mot_lan warning:', err.message);
       });
     }
+  },
+  {
+    id: '20261109_add_khung_gio_diemdanh_to_cauhinh',
+    up: async (sequelize) => {
+      await sequelize.query(`
+        ALTER TABLE "core_cauhinhhethong" ADD COLUMN IF NOT EXISTS "gio_bat_dau_an" VARCHAR(10) DEFAULT '10:55';
+        ALTER TABLE "core_cauhinhhethong" ADD COLUMN IF NOT EXISTS "gio_ket_thuc_an" VARCHAR(10) DEFAULT '11:30';
+        ALTER TABLE "core_cauhinhhethong" ADD COLUMN IF NOT EXISTS "gio_bat_dau_ngu" VARCHAR(10) DEFAULT '11:20';
+        ALTER TABLE "core_cauhinhhethong" ADD COLUMN IF NOT EXISTS "gio_ket_thuc_ngu" VARCHAR(10) DEFAULT '12:00';
+        UPDATE "core_cauhinhhethong"
+        SET "gio_bat_dau_an" = COALESCE("gio_bat_dau_an", '10:55'),
+            "gio_ket_thuc_an" = COALESCE("gio_ket_thuc_an", '11:30'),
+            "gio_bat_dau_ngu" = COALESCE("gio_bat_dau_ngu", '11:20'),
+            "gio_ket_thuc_ngu" = COALESCE("gio_ket_thuc_ngu", '12:00')
+        WHERE "id" = 1;
+      `).catch(err => {
+        console.warn('Migration 20261109_add_khung_gio_diemdanh_to_cauhinh warning:', err.message);
+      });
+    }
   }
 ];
 
